@@ -9,14 +9,32 @@ DBSCAN, short for Density-Based Spatial Clustering of Applications with Noise, i
 ### How DBSCAN Works
 DBSCAN relies on two key parameters: eps (epsilon) and min_samples.
 
-eps (epsilon): This is the maximum distance between two points for them to be considered as part of the same neighborhood.
-min_samples: This is the minimum number of points required to form a dense region (i.e., a cluster).
+* eps (epsilon): This is the maximum distance between two points for them to be considered as part of the same neighborhood.
+* min_samples: This is the minimum number of points required to form a dense region (i.e., a cluster).
 
 The algorithm works as follows:
 
-Identify Core Points: Points that have at least min_samples points within a distance of eps are considered core points.
-Form Clusters: A cluster is formed by core points and all points (core or non-core) that are reachable from these core points. Reachability means being within eps distance from a core point.
-Identify Noise: Points that are not reachable from any core points are classified as noise.
+* Identify Core Points: Points that have at least min_samples points within a distance of eps are considered core points.
+* Form Clusters: A cluster is formed by core points and all points (core or non-core) that are reachable from these core points. Reachability means being within eps distance from a core point.
+* Identify Noise: Points that are not reachable from any core points are classified as noise.
 
 ## The Data
 
+The data used in this project comes from the Botany database. Specifically, we join the CollectingEvent and Locality tables on the LocalityID column.
+
+* From CollectingEvent, we use the StartDate and EndDate columns. This allows us to cluster on temporal data.
+* From Locality, we use the LocalityName, Latitude1, and Longitude1 columns. LocalityName provides a short text description of where the collecting event occurred, e.g. "Snowball Creek Valley, on private property, abt. 10km north of Grand Forks". Latitude1 and Longitude1 provide the actual lat/long coordinates of where the collecting event occurred.
+
+## Data Preprocessing
+
+Firstly, collecting events dated prior to the year 1677 were filtered out (very few events match this criteria), as dates prior to then are not supported by PANDAS datetime. Next, we compute a Levenshtein distance matrix to encode the string distances between the different textual locality data. This is by far the most computationally expensive portion of the project, taking several minutes to run even on a small subset of 200 data points, and much much longer on the full dataset of over 200k points. 
+
+We then perform multidimensional scaling, or MDS, on the Levenshtein matrix to reduce the dimensionality of the matrix down to 2 dimensions. Doing this allows for faster computations during the clustering step, while preserving much of the information in the original matrix. We then drop NA values and normalize all variables using the Sklearn StandardScaler. 
+
+## Clustering
+
+We have yet to analyze clustering results on the full dataset, and thus we don't yet know a suitable value or range for the epsilon parameter. On a smaller subset of 20k points, an eps value of 0.02-0.04 achieved satisfactory results. For min_samples_per_cluster, a value between 3 and 10 is suitable regardless of data size. As an example, we've shown the clustering results restricted to the Western US on the smaller subset of data. Here, we use an epsilon value of 0.03, with a minimum of 10 samples per cluster. ![dbscan_hulls](https://github.com/calacademy-research/expedition-clustering/assets/51836467/3bbbb59c-f98c-4de3-ae6e-899984757d61)
+
+## Next Steps
+
+The most obvious next step would be to optimize the computation of the Levenshtein matrix, or to go with an alternative method for representing locality text. One recommendation would be to use a [BERT](https://huggingface.co/google-bert/bert-base-uncased) model, or another such encoder-only transformer, to create vector embeddings and compute similarites that way. Unlike Levenshtein, BERT computations can be sent to the GPU, significantly speeding up processing time. 
