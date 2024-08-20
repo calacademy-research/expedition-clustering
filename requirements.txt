@@ -1,0 +1,9 @@
+pymysql
+numpy
+pandas
+scikit-learn
+matplotlib
+shapely
+geopandas
+alphashape
+geodatasets
