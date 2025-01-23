@@ -9,3 +9,4 @@ alphashape
 geodatasets
 cryptography
 Levenshtein
+cartopy
