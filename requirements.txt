@@ -10,3 +10,4 @@ geodatasets
 cryptography
 Levenshtein
 cartopy
+ipywidgets
