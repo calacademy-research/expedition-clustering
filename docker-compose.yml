@@ -1,4 +1,5 @@
 version: '3.8'
+
 services:
   mysql:
     image: mysql:latest
@@ -8,12 +9,19 @@ services:
       MYSQL_USER: myuser
       MYSQL_PASSWORD: mypassword
       MYSQL_DATABASE: exped_cluster_db
+    command: >
+      --max_allowed_packet=256M
+      --innodb_log_file_size=256M
+      --net_buffer_length=16K
     volumes:
       - exped_cluster_mysql_data:/var/lib/mysql
-      - ./data/CASBotanybackup2024-08-19.sql.gz:/docker-entrypoint-initdb.d/CASBotanybackup2024-08-19.sql.gz
+      - ./data/CASBotanybackup2025-01-23.sql.gz:/docker-entrypoint-initdb.d/CASBotanybackup2025-01-23.sql.gz
     ports:
       - "3306:3306"
-
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
+      interval: 10s
+      retries: 5
   phpmyadmin:
     image: phpmyadmin/phpmyadmin
     platform: linux/amd64
@@ -25,7 +33,8 @@ services:
     ports:
       - "8081:80"
     depends_on:
-      - mysql
+      mysql:
+        condition: service_healthy
 
 volumes:
   exped_cluster_mysql_data:
