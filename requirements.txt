@@ -1,0 +1,13 @@
+pymysql
+numpy
+pandas
+scikit-learn
+matplotlib
+shapely
+geopandas
+alphashape
+geodatasets
+cryptography
+Levenshtein
+cartopy
+ipywidgets

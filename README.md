@@ -1,41 +1,222 @@
-# Clustering Expeditions with DBSCAN
+# Expedition Clustering
 
-This project aims to cluster CAS expeditions across the continental US by way of DBSCAN clustering. Within the Botany database, we've found that we can recreate entire expeditions by looking at the locality of a specimen's collection site as well as the start and end date of a collection event, clustering on these points, and then using convex hulls to create a polygon representation of an expedition's area of coverage. 
+## Table of Contents
+- [Overview](#overview)
+- [Project Background](#project-background)
+- [Features](#features)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Project Structure](#project-structure)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
 
-## What is DBSCAN?
+---
 
-DBSCAN, short for Density-Based Spatial Clustering of Applications with Noise, is a very popular clustering algorithm that can identify clusters, or groups, in data with varying shapes and sizes. This is what makes it versatile across many domains. Unlike traditional clustering algorithms like K-Means, DBSCAN doesn't require you to specify the number of clusters in advance, making it particularly useful for large, complex, or unstructured data.
+## Overview  
+The **Expedition Clustering** project aims to analyze and organize botanical specimen collection data by identifying and grouping individual specimens into their respective expeditions. While our dataset contains extensive information on over a million specimens, their association with specific collection expeditions is often unclear. Understanding these connections will improve data organization, enable better summarization, and support the development of interactive, narrative-based tools for both scientists and educators.
 
-### How DBSCAN Works
-DBSCAN relies on two key parameters: eps (epsilon) and min_samples.
+By clustering specimens based on collection patterns, locations, collector information, and dates, this project will provide deeper insights into historical and modern botanical expeditions. These insights will facilitate research, highlight under-sampled regions, and help build engaging visualizations for storytelling and scientific analysis.
 
-* eps (epsilon): This is the maximum distance between two points for them to be considered as part of the same neighborhood.
-* min_samples: This is the minimum number of points required to form a dense region (i.e., a cluster).
+---
 
-The algorithm works as follows:
+## Project Background  
+Botanical collections serve as invaluable records of biodiversity, helping scientists track species distributions, ecological changes, and conservation needs. However, these collections are often cataloged at the specimen level, making it difficult to reconstruct the expeditions that gathered them. Expeditions—organized efforts by researchers, institutions, and explorers—play a crucial role in shaping our understanding of plant biodiversity. By identifying expedition clusters, we can:
 
-* Identify Core Points: Points that have at least min_samples points within a distance of eps are considered core points.
-* Form Clusters: A cluster is formed by core points and all points (core or non-core) that are reachable from these core points. Reachability means being within eps distance from a core point.
-* Identify Noise: Points that are not reachable from any core points are classified as noise.
+- Reconstruct historical collection efforts and their geographic scope.  
+- Detect biases in collection efforts and identify under-sampled regions.  
+- Enhance database organization by grouping specimens within meaningful contexts.  
+- Enable interactive tools that allow scientists, educators, and the public to explore past expeditions through maps and narratives.  
 
-## The Data
+This project leverages data science, natural language processing, and clustering techniques to infer expedition groupings from collection metadata, contributing to both research and public engagement with botanical history.
 
-The data used in this project comes from the Botany database. Specifically, we join the CollectingEvent and Locality tables on the LocalityID column.
+---
 
-* From CollectingEvent, we use the StartDate and EndDate columns. This allows us to cluster on temporal data.
-* From Locality, we use the LocalityName, Latitude1, and Longitude1 columns. LocalityName provides a short text description of where the collecting event occurred, e.g. "Snowball Creek Valley, on private property, abt. 10km north of Grand Forks". Latitude1 and Longitude1 provide the actual lat/long coordinates of where the collecting event occurred.
+## Features  
+✅ **Spatiotemporal Clustering** – Groups specimens into expeditions based on collection locations and dates.  
+✅ **Machine Learning Integration** – Applies clustering algorithms and NLP techniques for automated classification.  
+✅ **Data Visualization** – Generates interactive maps and plots for understanding collection trends.  
+✅ **Reproducible Workflow** – Supports automation and scalability through Python scripts and Jupyter notebooks.  
+✅ **Open Source** – Designed to be extensible for research and educational purposes.  
 
-## Data Preprocessing
+---
 
-Firstly, collecting events dated prior to the year 1677 were filtered out (very few events match this criteria), as dates prior to then are not supported by PANDAS datetime. Next, we compute a Levenshtein distance matrix to encode the string distances between the different textual locality data. This is by far the most computationally expensive portion of the project, taking several minutes to run even on a small subset of 200 data points, and much much longer on the full dataset of over 200k points. 
+## Installation  
 
-We then perform multidimensional scaling, or MDS, on the Levenshtein matrix to reduce the dimensionality of the matrix down to 2 dimensions. Doing this allows for faster computations during the clustering step, while preserving much of the information in the original matrix. We then drop NA values and normalize all variables using the Sklearn StandardScaler. 
+### Prerequisites  
+Ensure you have the following installed:  
+- Python 3.8+  
+- Docker (for containerized execution)  
 
-## Clustering
+### Setup  
+Clone the repository:
+```bash
+git clone https://github.com/yourusername/expedition-clustering.git
+cd expedition-clustering
+```
 
-We have yet to analyze clustering results on all the features (lat/long + text + date), and thus we don't yet know a suitable value or range for the epsilon parameter. Clustering only on latitude and longitude, we found that an epsilon value of between 0.01 and 0.04 achieves good results. For min_samples_per_cluster, a value between 3 and 10 is suitable regardless of data size. As an example, we've shown the results restricted to the Western US clustered on just lat and long. Here, we use an epsilon value of 0.04, with a minimum of 10 samples per cluster. The code can be found [here](https://github.com/calacademy-research/expedition-clustering/blob/main/DBSCAN_hulls_latlong.ipynb). <img width="882" alt="png1" src="https://github.com/calacademy-research/expedition-clustering/assets/51836467/9c778f26-d11f-4b52-b334-ac651fba2bf6">
+Create a virtual environment and install dependencies:
+```python -m venv venv
+source venv/bin/activate  # On Windows, use venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+(Optional) Start the database container using Docker:
+
+```bash
+docker-compose up -d
+docker exec -i exped_cluster_mysql_container mysql -u root -prootpassword exped_cluster_db < ./data/{unzipped botany backup filename}
+```
 
 
-## Next Steps
+## Usage  
+ 
+### Running the Clustering Pipeline  
+Currently all clustering functions must be called from within the Jupyter Notebooks. Programmatic pipeline scripts are under development.
+ 
+### Running Jupyter Notebooks  
+The notebooks are meant to be run in order of ascending prepending integer. Running them in sequence is crucial as they depend on artifacts saved between notebooks.
+ 
+ 
+---  
+ 
+## Project Structure  
+ 
+The repository is organized as follows:  
+ 
+```plaintext  
+EXPEDITION-CLUSTERING/  
+│── data/                      # Contains raw and processed dataset files  
+│   ├── CASBotanybackup2025-01-23.sql        # SQL database backup  
+│   ├── CASBotanybackup2025-01-23.sql.gz  ‼️  # Compressed SQL backup  
+│   ├── clean_df.csv                         # Cleaned dataset after preprocessing  
+│   ├── cluster_summary_stats.csv            # Summary statistics of clustered data  
+│   ├── full_df.csv                          # Full dataset before processing  
+│   ├── full_processed_df.csv                # Fully processed dataset after clustering  
+│   ├── labeled_clean_df.csv                 # Clean dataset with assigned cluster labels  
+│   ├── processed_df.csv                      # Intermediate processed dataset  
+│  
+│── docs/                      # Documentation and notes  
+│   ├── exped_clust_notes.pages  # Notes related to expedition clustering  
+│  
+│── notebooks/                  # Jupyter notebooks for analysis and clustering  
+│   ├── 0_table_eda.ipynb                        # Exploratory data analysis of specimen collections  
+│   ├── 1_manual_cluster_labeling.ipynb         # Manual cluster labeling and validation  
+│   ├── 2_spatiotemporal_clustering_algorithm.ipynb  # Primary clustering algorithm based on space-time data  
+│   ├── 3_secondary_clustering.ipynb            # Secondary clustering refinements and validation  
+│   ├── 4_determination.ipynb                    # Final decision-making on clusters  
+│  
+│── .gitignore                # Specifies files and folders to ignore in version control  
+│── cluster_pipeline.py       # Python script implementing the clustering pipeline  
+│── docker-compose.yml        # Configuration for running services in Docker  
+│── plotting.py               # Script for visualizing clustering results  
+│── README.md                 # Project documentation  
+│── requirements.txt          # Dependencies required for running the project  
+```  
+ 
+---  
+ 
+## Contributing  
+We welcome contributions! To contribute:  
+1. Fork the repository.  
+2. Create a new branch (`git checkout -b feature-branch`).  
+3. Commit your changes (`git commit -m "Add feature"`) and push (`git push origin feature-branch`).  
+4. Open a Pull Request.  
+ 
+---  
+ 
+## License  
+This project is licensed under the **MIT License** – see the [LICENSE](LICENSE) file for details.  
+ 
+---  
+ 
+## Acknowledgments  
+🔬 Special thanks to **CalAcademy's botany collections team** for providing access to over a million collection records.  
+🌍 Thanks to the **open-source community** for developing powerful data science tools that make this research possible.  
+📚 Inspired by previous works in **botanical data clustering and machine learning applications in biodiversity research**.  
+ 
+---  
+ 
+Happy exploring! 🚀🌿  
 
-The most obvious next step would be to optimize the computation of the Levenshtein matrix, or to go with an alternative method for representing locality text. One recommendation would be to use a [BERT](https://huggingface.co/google-bert/bert-base-uncased) model, or another such encoder-only transformer, to create vector embeddings and compute similarites that way. Unlike Levenshtein, BERT computations can be sent to the GPU, significantly speeding up processing time. Additionally, parameter tuning for optimal values of eps and min_samples_per_cluster would be needed.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Expedition Clustering
+
+## Project Overview  
+The **Expedition Clustering** project aims to analyze and organize botanical specimen collection data by identifying and grouping individual specimens into their respective expeditions. While our dataset contains extensive information on over a million specimens, their association with specific collection expeditions is often unclear. Understanding these connections will improve data organization, enable better summarization, and support the development of interactive, narrative-based tools for both scientists and educators.
+
+By clustering specimens based on collection patterns, locations, collector information, and dates, this project will provide deeper insights into historical and modern botanical expeditions. These insights will facilitate research, highlight under-sampled regions, and help build engaging visualizations for storytelling and scientific analysis.
+
+---
+
+## Project Background  
+Botanical collections serve as invaluable records of biodiversity, helping scientists track species distributions, ecological changes, and conservation needs. However, these collections are often cataloged at the specimen level, making it difficult to reconstruct the expeditions that gathered them. Expeditions—organized efforts by researchers, institutions, and explorers—play a crucial role in shaping our understanding of plant biodiversity. By identifying expedition clusters, we can:
+
+- Reconstruct historical collection efforts and their geographic scope.  
+- Detect biases in collection efforts and identify under-sampled regions.  
+- Enhance database organization by grouping specimens within meaningful contexts.  
+- Enable interactive tools that allow scientists, educators, and the public to explore past expeditions through maps and narratives.  
+
+This project leverages data science, natural language processing, and clustering techniques to infer expedition groupings 
+from collection metadata, contributing to both research and public engagement with botanical history.
+
+---
+
+## Project Structure
+
+This repository is established as a data science exploratory effort. As such, it consists of a simple flat package layout with **data/**, **docs/**, and **notebooks/** subdirectories, and a few python modules containing pipeline and plotting functions. 
+
+The repository is organized as follows:
+
+```plaintext
+EXPEDITION-CLUSTERING/
+│── data/                      # Contains raw and processed dataset files. The contents of this directory are hidden from git
+│   ├── **CASBotanybackup2025-01-23.sql.gz**     #  ‼️ Compressed SQL backup: upload your own version locally ‼️
+│
+│── docs/                      # Documentation and notes
+│   ├── exped_clust_notes.pages  # Notes related to expedition clustering
+│
+│── notebooks/                  # Jupyter notebooks for analysis and clustering
+│   ├── 0_table_eda.ipynb                        # Exploratory data analysis of specimen collections
+│   ├── 1_manual_cluster_labeling.ipynb         # Manual cluster labeling and validation
+│   ├── 2_spatiotemporal_clustering_algorithm.ipynb  # Primary clustering algorithm based on space-time data
+│   ├── 3_secondary_clustering.ipynb            # Secondary clustering refinements and validation
+│   ├── 4_determination.ipynb                    # Final decision-making on clusters
+│
+│── .gitignore                # Specifies files and folders to ignore in version control
+│── cluster_pipeline.py       # Python script implementing the clustering pipeline
+│── docker-compose.yml        # Configuration for running services in Docker
+│── plotting.py               # Script for visualizing clustering results
+│── README.md                 # Project documentation
+│── requirements.txt          # Dependencies required for running the project
+
+```
+---
+
+## Requirements
+
+The project dependencies are listed in the [`requirements.txt`](command:_github.copilot.openRelativePath?%5B%7B%22scheme%22%3A%22file%22%2C%22authority%22%3A%22%22%2C%22path%22%3A%22%2FUsers%2Fdangause%2FDesktop%2Fcalacademy%2Fexpedition-clustering%2Frequirements.txt%22%2C%22query%22%3A%22%22%2C%22fragment%22%3A%22%22%7D%5D "/Users/dangause/Desktop/calacademy/expedition-clustering/requirements.txt") file. To install the required packages, run:
+
+```sh
+pip install -r requirements.txt
