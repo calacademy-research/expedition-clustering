@@ -69,51 +69,96 @@ docker exec -i exped_cluster_mysql_container mysql -u root -prootpassword exped_
 ```
 
 
-## Usage  
- 
-### Running the Clustering Pipeline  
-Currently all clustering functions must be called from within the Jupyter Notebooks. Programmatic pipeline scripts are under development.
- 
-### Running Jupyter Notebooks  
-The notebooks are meant to be run in order of ascending prepending integer. Running them in sequence is crucial as they depend on artifacts saved between notebooks.
+## Usage
 
-### Command-Line Runner
+### Quick Start: Run from Command Line
 
-After installing the package, you can execute the full pipeline without a notebook:
+The simplest way to run the clustering pipeline is using the [cluster.py](cluster.py) script:
 
 ```bash
-python scripts/run_pipeline.py --e-dist 12 --e-days 5 --output data/clustered.csv
+# Basic usage (clusters all specimens with default parameters)
+python cluster.py
+
+# Specify clustering parameters
+python cluster.py --e-dist 15 --e-days 10
+
+# Test with a sample
+python cluster.py --limit 10000 --output data/test_output.csv
+
+# Full parameter list
+python cluster.py --help
 ```
 
-or via the shell wrapper:
+**Key Parameters:**
+- `--e-dist`: Spatial epsilon in kilometers (default: 10) - maximum distance between specimens in the same cluster
+- `--e-days`: Temporal epsilon in days (default: 7) - maximum time gap between specimens in the same cluster
+- `--limit`: Number of specimens to process (useful for testing)
+- `--output`: Output CSV file path (default: `data/clustered_expeditions.csv`)
+- `--host`, `--user`, `--password`, `--database`: Database connection settings
+
+**Example Output:**
+```
+============================================================
+Clustering Results:
+  Total specimens: 5000
+  Total expeditions (clusters): 2161
+  Average expedition size: 2.31 specimens
+  Median expedition size: 1 specimens
+  Largest expedition: 111 specimens
+============================================================
+```
+
+### Jupyter Notebooks (Advanced Exploration)
+
+For exploratory analysis and parameter tuning, use the notebooks in order:
+
+1. [0_table_eda.ipynb](notebooks/0_table_eda.ipynb) - Explore database structure
+2. [1_manual_cluster_labeling.ipynb](notebooks/1_manual_cluster_labeling.ipynb) - Manual validation
+3. [2_spatiotemporal_clustering_algorithm.ipynb](notebooks/2_spatiotemporal_clustering_algorithm.ipynb) - Main clustering
+4. [3_secondary_clustering.ipynb](notebooks/3_secondary_clustering.ipynb) - Refinement
+5. [4_determination.ipynb](notebooks/4_determination.ipynb) - Final analysis
+
+### Python Package (Programmatic Usage)
+
+Install the package and use it in your own scripts:
 
 ```bash
-scripts/run_pipeline.sh --sample 50000
+pip install -e .
 ```
-
-Use `--host`, `--user`, `--password`, and related flags to override database credentials. `--sample` limits the number of rows passed to the clustering step for quicker experiments, `--table-limit` constrains how many rows are fetched from each MySQL table, and `--tables` lets you control which tables are loaded. The CLI fetches only rows related to the limited data slice and further filters them before merging; toggle this behavior with `--fetch-related-only/--no-fetch-related-only`, pick whether to anchor the slice on collection objects or collecting events via `--primary-table`, and control the join filtering with `--no-filter-related`. Add `--log-level DEBUG` to see detailed progress logs (per-table timings, row counts, warnings when a related table returns zero rows, etc.). If the clean dataframe ends up empty, increase `--table-limit`, adjust `--primary-table`, disable related filtering, or load full tables so the clustering pipeline has data to work with.
-
-
-## Python Package
-
-Install the reusable module with `pip install -e .` and mirror the notebook workflow in regular scripts:
 
 ```python
-from expedition_clustering import (
-    DatabaseConfig,
-    build_clean_dataframe,
-    create_pipeline,
-    load_core_tables,
-)
+import pandas as pd
+import pymysql
+from expedition_clustering import create_pipeline
 
-config = DatabaseConfig()
-tables = load_core_tables(config)
-clean_df = build_clean_dataframe(tables)
+# Connect to database and load data
+conn = pymysql.connect(host='localhost', user='myuser', password='mypassword',
+                       database='exped_cluster_db')
+
+query = """
+    SELECT ce.CollectingEventID as collectingeventid,
+           ce.StartDate as startdate,
+           l.Latitude1 as latitude1,
+           l.Longitude1 as longitude1
+    FROM collectingevent ce
+    INNER JOIN collectionobject co ON ce.CollectingEventID = co.CollectingEventID
+    LEFT JOIN locality l ON ce.LocalityID = l.LocalityID
+    WHERE ce.StartDate IS NOT NULL AND l.Latitude1 IS NOT NULL
+    LIMIT 10000
+"""
+
+df = pd.read_sql_query(query, conn)
+df.columns = df.columns.str.lower()
+df['startdate'] = pd.to_datetime(df['startdate'])
+
+# Run clustering
 pipeline = create_pipeline(e_dist=10, e_days=7)
-clustered = pipeline.fit_transform(clean_df)
+clustered = pipeline.fit_transform(df)
+
+print(f"Created {clustered['spatiotemporal_cluster_id'].nunique()} expedition clusters")
 ```
 
-This encapsulates the preparation logic from `0_table_eda.ipynb` and exposes the clustering helpers without copying code across notebooks.
+For more advanced usage with the built-in data loading utilities, see the [notebooks](notebooks/) and [test_simple.py](test_simple.py).
 
 ### Development (uv + Ruff)
 

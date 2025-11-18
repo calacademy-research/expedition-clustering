@@ -67,10 +67,25 @@ def merge_core_tables(
     making the resulting DataFrame lean enough for re-use in scripts/tests.
     """
 
-    event_df = collecting_event_df.reindex(columns=COLLECTING_EVENT_COLUMNS).copy()
-    object_df = collection_object_df.reindex(columns=COLLECTION_OBJECT_COLUMNS).copy()
-    locality_df = locality_df.reindex(columns=LOCALITY_COLUMNS).copy()
-    geography_df = geography_df.reindex(columns=GEOGRAPHY_COLUMNS).copy()
+    # Select only the columns we need (that exist in the source dataframes)
+    event_cols = [c for c in COLLECTING_EVENT_COLUMNS if c in collecting_event_df.columns]
+    object_cols = [c for c in COLLECTION_OBJECT_COLUMNS if c in collection_object_df.columns]
+    locality_cols = [c for c in LOCALITY_COLUMNS if c in locality_df.columns]
+    geography_cols = [c for c in GEOGRAPHY_COLUMNS if c in geography_df.columns]
+
+    event_df = collecting_event_df[event_cols].copy()
+    object_df = collection_object_df[object_cols].copy()
+    locality_df = locality_df[locality_cols].copy()
+    geography_df = geography_df[geography_cols].copy()
+
+    if logger:
+        logger.debug(
+            "Selected columns -> events: %s, objects: %s, localities: %s, geographies: %s",
+            event_cols,
+            object_cols,
+            locality_cols,
+            geography_cols,
+        )
 
     for df, column in (
         (event_df, "CollectingEventID"),
@@ -105,11 +120,18 @@ def merge_core_tables(
         how="inner",
     )
 
+    if logger:
+        logger.debug("After event+object merge: %s rows", len(full_df))
+
     full_df = full_df.merge(
-        locality_df[LOCALITY_COLUMNS], on="LocalityID", how="left"
+        locality_df[locality_cols], on="LocalityID", how="left"
     )
+
+    if logger:
+        logger.debug("After locality merge: %s rows", len(full_df))
+
     full_df = full_df.merge(
-        geography_df[GEOGRAPHY_COLUMNS], on="GeographyID", how="left"
+        geography_df[geography_cols], on="GeographyID", how="left"
     )
     if logger:
         logger.debug("Merged dataframe rows=%s", len(full_df))
@@ -136,17 +158,25 @@ def clean_for_clustering(
     """
 
     df = merged_df.copy()
-    for column in ("StartDate", "EndDate"):
+
+    # Normalize column names to lowercase for consistency
+    df.columns = df.columns.str.lower()
+
+    for column in ("startdate", "enddate"):
         df[column] = pd.to_datetime(df[column], errors="coerce")
 
+    # Create unified lat/lon columns, preferring precise coordinates
+    df["latitude1"] = df["latitude1"].fillna(df["centroidlat"])
+    df["longitude1"] = df["longitude1"].fillna(df["centroidlon"])
+
     if drop_missing_spatial:
-        df = df[~df[["Latitude1", "CentroidLat"]].isna().all(axis=1)]
+        df = df[df["latitude1"].notna() & df["longitude1"].notna()]
 
     if drop_missing_start_date:
-        df = df[df["StartDate"].notna()]
+        df = df[df["startdate"].notna()]
 
     df = df.reset_index(drop=True)
-    df["spatial_flag"] = np.where(df["Latitude1"].notna(), 1, 0)
+    df["spatial_flag"] = np.where(df["latitude1"].notna(), 1, 0)
     if logger:
         logger.debug("Clean dataframe rows=%s (spatial flag counts=%s)", len(df), df["spatial_flag"].value_counts(dropna=False).to_dict())
     return df

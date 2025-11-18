@@ -22,10 +22,14 @@ class Preprocessor(BaseEstimator, TransformerMixin):
         missing = [col for col in required_columns if col not in X.columns]
         if missing:
             raise ValueError(f"Input dataframe is missing required columns: {missing}. Did the preprocessing step drop all rows?")
+
+        # Make a copy to avoid modifying the original
+        X = X.copy()
+
         # Remove duplicate collectingeventid, keeping the first occurrence
         X = X.drop_duplicates(subset='collectingeventid', keep='first')
 
-        # Drop rows with null latitude1, longitude1, or startdate
+        # Drop rows with null latitude1, longitude1, or startdate (should already be handled)
         X = X.dropna(subset=['latitude1', 'longitude1', 'startdate'])
 
         # Drop rows outside valid latitude and longitude ranges
@@ -36,7 +40,7 @@ class Preprocessor(BaseEstimator, TransformerMixin):
         X['startdate'] = pd.to_datetime(X['startdate'], errors='coerce')
         X = X[(X['startdate'].dt.year >= 1800) & (X['startdate'] <= today)]
 
-        return X
+        return X.reset_index(drop=True)
 
 # Step 2: Custom Transformer for Spatial DBSCAN Clustering
 class SpatialDBSCAN(BaseEstimator, TransformerMixin):
@@ -47,6 +51,7 @@ class SpatialDBSCAN(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
+        X = X.copy()
         coords = np.radians(X[['latitude1', 'longitude1']].values)
         db = DBSCAN(eps=self.e_dist / 6371, min_samples=1, metric='haversine')  # Convert e_dist to radians
         X['spatial_cluster_id'] = db.fit_predict(coords)
@@ -61,6 +66,7 @@ class TemporalDBSCAN(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
+        X = X.copy()
         X['temporal_cluster_id'] = -1  # Default to unclustered
 
         for cluster_id in X['spatial_cluster_id'].unique():
@@ -79,11 +85,12 @@ class CombineClusters(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
+        X = X.copy()
         # Save original indices
         original_indices = X.index
 
         # Generate unique integer IDs for spatiotemporal clusters
-        cluster_combinations = X[['spatial_cluster_id', 'temporal_cluster_id']].drop_duplicates()
+        cluster_combinations = X[['spatial_cluster_id', 'temporal_cluster_id']].drop_duplicates().reset_index(drop=True)
         cluster_combinations['spatiotemporal_cluster_id'] = range(len(cluster_combinations))
         X = X.merge(cluster_combinations, on=['spatial_cluster_id', 'temporal_cluster_id'], how='left')
 
