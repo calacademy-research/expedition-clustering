@@ -9,9 +9,8 @@ The functions below mirror the `0_table_eda.ipynb` workflow that:
 
 from __future__ import annotations
 
-from typing import Mapping, Sequence, Optional
-
 import logging
+from typing import Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -68,17 +67,21 @@ def merge_core_tables(
     making the resulting DataFrame lean enough for re-use in scripts/tests.
     """
 
-    event_df = collecting_event_df.loc[:, COLLECTING_EVENT_COLUMNS].copy()
-    object_df = collection_object_df.loc[:, COLLECTION_OBJECT_COLUMNS].copy()
-    locality_df = locality_df.loc[:, LOCALITY_COLUMNS].copy()
-    try:
-        geography_df = geography_df.loc[:, GEOGRAPHY_COLUMNS].copy()
-    except KeyError:
-        missing_cols = [col for col in GEOGRAPHY_COLUMNS if col not in geography_df.columns]
-        raise KeyError(
-            f"Geography DataFrame is missing required columns: {missing_cols}. "
-            "If you're fetching related-only rows and got zero results, try increasing --table-limit or disabling related-only fetching."
-        ) from None
+    event_df = collecting_event_df.reindex(columns=COLLECTING_EVENT_COLUMNS).copy()
+    object_df = collection_object_df.reindex(columns=COLLECTION_OBJECT_COLUMNS).copy()
+    locality_df = locality_df.reindex(columns=LOCALITY_COLUMNS).copy()
+    geography_df = geography_df.reindex(columns=GEOGRAPHY_COLUMNS).copy()
+
+    for df, column in (
+        (event_df, "CollectingEventID"),
+        (object_df, "CollectingEventID"),
+        (event_df, "LocalityID"),
+        (locality_df, "LocalityID"),
+        (locality_df, "GeographyID"),
+        (geography_df, "GeographyID"),
+    ):
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce")
 
     if filter_related:
         event_ids = event_df["CollectingEventID"].dropna().unique()

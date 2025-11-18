@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -107,6 +108,12 @@ def parse_args() -> argparse.Namespace:
         help="Chunk size for related-only SQL fetches (default: 2000).",
     )
     parser.add_argument(
+        "--primary-table",
+        choices=["collectionobject", "collectingevent"],
+        default="collectionobject",
+        help="When fetching related rows, choose which table to limit first (default: collectionobject).",
+    )
+    parser.add_argument(
         "--no-filter-related",
         action="store_true",
         help="Disable filtering collection objects/localities/geographies to only those referenced by the loaded collecting events.",
@@ -155,6 +162,7 @@ def main() -> None:
         logger=logger,
         related_only=args.fetch_related_only,
         related_chunk_size=args.related_chunk_size,
+        primary_table=args.primary_table,
     )
     missing_cols = [
         name
@@ -173,6 +181,12 @@ def main() -> None:
         logger=logger,
     )
     logger.info("Clean dataframe rows: %s", len(clean_df))
+
+    if clean_df.empty:
+        logger.error(
+            "Clean dataframe is empty. Try increasing --table-limit, disabling related-only fetching (--no-fetch-related-only), or turning off filtering (--no-filter-related)."
+        )
+        sys.exit(1)
 
     clean_df = maybe_sample(clean_df, args.sample, args.seed)
     logger.info("Rows passed to clustering: %s", len(clean_df))

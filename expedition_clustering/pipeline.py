@@ -18,6 +18,10 @@ class Preprocessor(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
+        required_columns = ['collectingeventid', 'latitude1', 'longitude1', 'startdate']
+        missing = [col for col in required_columns if col not in X.columns]
+        if missing:
+            raise ValueError(f"Input dataframe is missing required columns: {missing}. Did the preprocessing step drop all rows?")
         # Remove duplicate collectingeventid, keeping the first occurrence
         X = X.drop_duplicates(subset='collectingeventid', keep='first')
 
@@ -258,5 +262,4 @@ param_grid = {
     'spatial_dbscan__e_dist': [.1, 1, 5, 10, 15, 20],
     'temporal_dbscan__e_days': [3, 5, 7, 9, 10]
 }
-
 

@@ -91,7 +91,7 @@ or via the shell wrapper:
 scripts/run_pipeline.sh --sample 50000
 ```
 
-Use `--host`, `--user`, `--password`, and related flags to override database credentials. `--sample` limits the number of rows passed to the clustering step for quicker experiments, `--table-limit` constrains how many rows are fetched from each MySQL table, and `--tables` lets you control which tables are loaded. The CLI fetches only rows related to the limited CollectingEvents and further filters them before merging; toggle this behavior with `--fetch-related-only/--no-fetch-related-only` and control the join filtering with `--no-filter-related`. Add `--log-level DEBUG` to see detailed progress logs (per-table timings, row counts, etc.).
+Use `--host`, `--user`, `--password`, and related flags to override database credentials. `--sample` limits the number of rows passed to the clustering step for quicker experiments, `--table-limit` constrains how many rows are fetched from each MySQL table, and `--tables` lets you control which tables are loaded. The CLI fetches only rows related to the limited data slice and further filters them before merging; toggle this behavior with `--fetch-related-only/--no-fetch-related-only`, pick whether to anchor the slice on collection objects or collecting events via `--primary-table`, and control the join filtering with `--no-filter-related`. Add `--log-level DEBUG` to see detailed progress logs (per-table timings, row counts, warnings when a related table returns zero rows, etc.). If the clean dataframe ends up empty, increase `--table-limit`, adjust `--primary-table`, disable related filtering, or load full tables so the clustering pipeline has data to work with.
 
 
 ## Python Package

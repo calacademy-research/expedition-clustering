@@ -9,10 +9,10 @@ shared across scripts, notebooks, and the command-line.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-from dataclasses import dataclass
 import logging
 import time
+from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Dict, Iterable, Iterator, Mapping, Optional, Sequence
 
 import pandas as pd
@@ -111,7 +111,7 @@ def fetch_table_by_ids(
 
     clean_ids = [i for i in ids if pd.notna(i)]
     if not clean_ids:
-        return pd.DataFrame(columns=columns if isinstance(columns, Sequence) else None)
+        return pd.DataFrame()
 
     frames = []
     with db_connection(config) as conn:
@@ -151,6 +151,7 @@ def load_core_tables(
     logger: Optional[logging.Logger] = None,
     related_only: bool = False,
     related_chunk_size: int = 2000,
+    primary_table: str = "collectionobject",
 ) -> Dict[str, pd.DataFrame]:
     """
     Load the tables explored in the notebooks into memory.
@@ -170,126 +171,122 @@ def load_core_tables(
     table_list = list(tables)
     data: Dict[str, pd.DataFrame] = {}
 
-    if related_only:
-        if "collectingevent" not in table_list:
-            raise ValueError("collectingevent must be included when related_only=True")
-        event_limit = table_limits.get("collectingevent") if table_limits else limit
+    def fetch_with_logging(
+        table_name: str, table_limit: Optional[int], where: Optional[str] = None
+    ) -> pd.DataFrame:
         if logger:
-            msg = "Fetching collectingevent"
-            if event_limit:
-                msg += f" (limit={event_limit})"
-            logger.info("%s...", msg)
-        start = time.perf_counter()
-        events_df = fetch_table(config, "collectingevent", limit=event_limit)
-        if logger:
-            logger.info(
-                "Finished collectingevent in %.2fs (rows=%s)",
-                time.perf_counter() - start,
-                len(events_df),
-            )
-        data["collectingevent"] = events_df
-
-        event_ids = events_df["CollectingEventID"].dropna().unique().tolist()
-        locality_ids = events_df["LocalityID"].dropna().unique().tolist()
-
-        if "collectionobject" in table_list:
-            if logger:
-                logger.info(
-                    "Fetching collectionobject rows for %s event IDs...",
-                    len(event_ids),
-                )
-            start = time.perf_counter()
-            data["collectionobject"] = fetch_table_by_ids(
-                config,
-                "collectionobject",
-                "CollectingEventID",
-                event_ids,
-                chunk_size=related_chunk_size,
-            )
-            if logger:
-                logger.info(
-                    "Finished collectionobject in %.2fs (rows=%s)",
-                    time.perf_counter() - start,
-                    len(data["collectionobject"]),
-                )
-
-        if "locality" in table_list:
-            if logger:
-                logger.info(
-                    "Fetching locality rows for %s locality IDs...",
-                    len(locality_ids),
-                )
-            start = time.perf_counter()
-            data["locality"] = fetch_table_by_ids(
-                config,
-                "locality",
-                "LocalityID",
-                locality_ids,
-                chunk_size=related_chunk_size,
-            )
-            if logger:
-                logger.info(
-                    "Finished locality in %.2fs (rows=%s)",
-                    time.perf_counter() - start,
-                    len(data["locality"]),
-                )
-
-        if "geography" in table_list:
-            geography_ids = (
-                data["locality"]["GeographyID"].dropna().unique().tolist()
-                if "locality" in data
-                else []
-            )
-            if logger:
-                logger.info(
-                    "Fetching geography rows for %s geography IDs...",
-                    len(geography_ids),
-                )
-            start = time.perf_counter()
-            data["geography"] = fetch_table_by_ids(
-                config,
-                "geography",
-                "GeographyID",
-                geography_ids,
-                chunk_size=related_chunk_size,
-            )
-            if logger:
-                logger.info(
-                    "Finished geography in %.2fs (rows=%s)",
-                    time.perf_counter() - start,
-                    len(data["geography"]),
-                )
-
-        for table in table_list:
-            if table in data:
-                continue
-            table_limit = table_limits.get(table) if table_limits else limit
-            if logger:
-                msg = f"Fetching {table}"
-                if table_limit:
-                    msg += f" (limit={table_limit})"
-                logger.info("%s...", msg)
-            start = time.perf_counter()
-            data[table] = fetch_table(config, table, limit=table_limit)
-            if logger:
-                logger.info(
-                    "Finished %s in %.2fs (rows=%s)",
-                    table,
-                    time.perf_counter() - start,
-                    len(data[table]),
-                )
-        return data
-
-    for table in table_list:
-        table_limit = table_limits.get(table) if table_limits else limit
-        if logger:
-            msg = f"Fetching {table}"
+            msg = f"Fetching {table_name}"
             if table_limit:
                 msg += f" (limit={table_limit})"
             logger.info("%s...", msg)
         start = time.perf_counter()
-        data[table] = fetch_table(config, table, limit=table_limit)
+        df = fetch_table(config, table_name, limit=table_limit, where=where)
         if logger:
-            elapsed = time.perf_counter() - start
-            logger.info("Finished %s in %.2fs (rows=%s)", table, elapsed, len(data[table]))
+            logger.info(
+                "Finished %s in %.2fs (rows=%s)",
+                table_name,
+                time.perf_counter() - start,
+                len(df),
+            )
+        return df
+
+    def related_fetch(table_name: str, id_column: str, ids: Sequence) -> pd.DataFrame:
+        if logger:
+            logger.info(
+                "Fetching %s rows for %s %s IDs...",
+                table_name,
+                len(ids),
+                id_column,
+            )
+        start = time.perf_counter()
+        df = fetch_table_by_ids(
+            config,
+            table_name,
+            id_column,
+            ids,
+            chunk_size=related_chunk_size,
+        )
+        if logger:
+            logger.info(
+                "Finished %s in %.2fs (rows=%s)",
+                table_name,
+                time.perf_counter() - start,
+                len(df),
+            )
+        if df.empty:
+            if logger:
+                logger.warning(
+                    "%s returned 0 related rows; falling back to limited fetch.",
+                    table_name,
+                )
+            return fetch_with_logging(
+                table_name, table_limits.get(table_name) if table_limits else limit
+            )
+        return df
+
+    if related_only:
+        primary_table = primary_table.lower()
+        if primary_table not in {"collectionobject", "collectingevent"}:
+            raise ValueError("primary_table must be 'collectionobject' or 'collectingevent'")
+        if "collectingevent" not in table_list:
+            raise ValueError("collectingevent must be included when related_only=True")
+        if primary_table == "collectionobject":
+            object_limit = table_limits.get("collectionobject") if table_limits else limit
+            objects_df = fetch_with_logging(
+                "collectionobject", object_limit, where="CollectingEventID IS NOT NULL"
+            )
+            if objects_df.empty:
+                raise ValueError(
+                    "No collectionobject rows with CollectingEventID were retrieved. "
+                    "Increase --table-limit or disable related-only fetching."
+                )
+            data["collectionobject"] = objects_df
+            event_ids = objects_df["CollectingEventID"].dropna().unique().tolist()
+            locality_ids: list = []
+            if "collectingevent" in table_list:
+                event_df = related_fetch("collectingevent", "CollectingEventID", event_ids)
+                data["collectingevent"] = event_df
+                locality_ids = event_df["LocalityID"].dropna().unique().tolist()
+            if "locality" in table_list:
+                locality_df = related_fetch("locality", "LocalityID", locality_ids)
+                data["locality"] = locality_df
+                geography_ids = locality_df["GeographyID"].dropna().unique().tolist()
+            else:
+                geography_ids = []
+            if "geography" in table_list:
+                data["geography"] = related_fetch("geography", "GeographyID", geography_ids)
+        else:
+            event_limit = table_limits.get("collectingevent") if table_limits else limit
+            events_df = fetch_with_logging("collectingevent", event_limit)
+            data["collectingevent"] = events_df
+
+            event_ids = events_df["CollectingEventID"].dropna().unique().tolist()
+            locality_ids = events_df["LocalityID"].dropna().unique().tolist()
+
+            if "collectionobject" in table_list:
+                data["collectionobject"] = related_fetch(
+                    "collectionobject", "CollectingEventID", event_ids
+                )
+            if "locality" in table_list:
+                data["locality"] = related_fetch("locality", "LocalityID", locality_ids)
+            if "geography" in table_list:
+                geography_ids = (
+                    data["locality"]["GeographyID"].dropna().unique().tolist()
+                    if "locality" in data
+                    else []
+                )
+                data["geography"] = related_fetch("geography", "GeographyID", geography_ids)
+
+        for table in table_list:
+            if table in data:
+                continue
+            data[table] = fetch_with_logging(
+                table, table_limits.get(table) if table_limits else limit
+            )
+        return data
+
+    for table in table_list:
+        data[table] = fetch_with_logging(
+            table, table_limits.get(table) if table_limits else limit
+        )
     return data
