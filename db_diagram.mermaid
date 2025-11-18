@@ -1,0 +1,53 @@
+erDiagram
+    CollectingEvent {
+        int CollectingEventID PK
+        int LocalityID FK
+        int CollectingEventAttributeID FK
+        date StartDate
+        date EndDate
+    }
+    CollectingEventAttribute {
+        int CollectingEventAttributeID PK
+    }
+    CollectionObject {
+        int CollectionObjectID PK
+        int CollectingEventID FK
+        text Text1
+    }
+    CollectionObjectAttachment {
+        int CollectionObjectAttachmentID PK
+        int CollectionObjectID FK
+        int AttachmentID FK
+    }
+    Attachment {
+        int AttachmentID PK
+        text AttachmentLocation
+    }
+    Locality {
+        int LocalityID PK
+        int GeographyID FK
+        float Latitude1
+        float Longitude1
+    }
+    LocalityDetail {
+        int LocalityDetailID PK
+        int LocalityID FK
+    }
+    GeoCoordDetail {
+        int GeoCoordDetailID PK
+        int LocalityID FK
+    }
+    Geography {
+        int GeographyID PK
+        float CentroidLat
+        float CentroidLon
+    }
+
+    CollectingEvent ||--o{ CollectionObject : "CollectingEventID"
+    CollectingEvent ||--|| CollectingEventAttribute : "CollectingEventAttributeID"
+    CollectingEvent }o--|| Locality : "LocalityID"
+    Locality ||--o{ GeoCoordDetail : "LocalityID"
+    Locality ||--o{ LocalityDetail : "LocalityID"
+    Locality }o--|| Geography : "GeographyID"
+    CollectionObject ||--o{ CollectionObjectAttachment : "CollectionObjectID"
+    Attachment ||--o{ CollectionObjectAttachment : "AttachmentID"

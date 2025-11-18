@@ -76,7 +76,59 @@ Currently all clustering functions must be called from within the Jupyter Notebo
  
 ### Running Jupyter Notebooks  
 The notebooks are meant to be run in order of ascending prepending integer. Running them in sequence is crucial as they depend on artifacts saved between notebooks.
- 
+
+### Command-Line Runner
+
+After installing the package, you can execute the full pipeline without a notebook:
+
+```bash
+python scripts/run_pipeline.py --e-dist 12 --e-days 5 --output data/clustered.csv
+```
+
+or via the shell wrapper:
+
+```bash
+scripts/run_pipeline.sh --sample 50000
+```
+
+Use `--host`, `--user`, `--password`, and related flags to override database credentials. `--sample` limits the number of rows passed to the clustering step for quicker experiments, `--table-limit` constrains how many rows are fetched from each MySQL table, and `--tables` lets you control which tables are loaded. The CLI fetches only rows related to the limited CollectingEvents and further filters them before merging; toggle this behavior with `--fetch-related-only/--no-fetch-related-only` and control the join filtering with `--no-filter-related`. Add `--log-level DEBUG` to see detailed progress logs (per-table timings, row counts, etc.).
+
+
+## Python Package
+
+Install the reusable module with `pip install -e .` and mirror the notebook workflow in regular scripts:
+
+```python
+from expedition_clustering import (
+    DatabaseConfig,
+    build_clean_dataframe,
+    create_pipeline,
+    load_core_tables,
+)
+
+config = DatabaseConfig()
+tables = load_core_tables(config)
+clean_df = build_clean_dataframe(tables)
+pipeline = create_pipeline(e_dist=10, e_days=7)
+clustered = pipeline.fit_transform(clean_df)
+```
+
+This encapsulates the preparation logic from `0_table_eda.ipynb` and exposes the clustering helpers without copying code across notebooks.
+
+### Development (uv + Ruff)
+
+Install runtime and development dependencies with [`uv`](https://github.com/astral-sh/uv):
+
+```bash
+uv sync --dev
+```
+
+Run Ruff linting/formatting via:
+
+```bash
+uv run ruff check
+uv run ruff format --check  # or `ruff format` to auto-format
+```
  
 ---  
  

@@ -1,0 +1,262 @@
+from datetime import datetime
+
+import numpy as np
+import pandas as pd
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.cluster import DBSCAN
+from sklearn.metrics import adjusted_rand_score, make_scorer
+from sklearn.model_selection import GridSearchCV, KFold, ParameterGrid
+from sklearn.pipeline import Pipeline
+
+
+# Step 1: Custom Transformer for Preprocessing
+class Preprocessor(BaseEstimator, TransformerMixin):
+    def __init__(self):
+        pass
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        # Remove duplicate collectingeventid, keeping the first occurrence
+        X = X.drop_duplicates(subset='collectingeventid', keep='first')
+
+        # Drop rows with null latitude1, longitude1, or startdate
+        X = X.dropna(subset=['latitude1', 'longitude1', 'startdate'])
+
+        # Drop rows outside valid latitude and longitude ranges
+        X = X[(X['latitude1'].between(-90, 90)) & (X['longitude1'].between(-180, 180))]
+
+        # Drop rows outside valid startdate range
+        today = datetime.today()
+        X['startdate'] = pd.to_datetime(X['startdate'], errors='coerce')
+        X = X[(X['startdate'].dt.year >= 1800) & (X['startdate'] <= today)]
+
+        return X
+
+# Step 2: Custom Transformer for Spatial DBSCAN Clustering
+class SpatialDBSCAN(BaseEstimator, TransformerMixin):
+    def __init__(self, e_dist):
+        self.e_dist = e_dist
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        coords = np.radians(X[['latitude1', 'longitude1']].values)
+        db = DBSCAN(eps=self.e_dist / 6371, min_samples=1, metric='haversine')  # Convert e_dist to radians
+        X['spatial_cluster_id'] = db.fit_predict(coords)
+        return X
+
+# Step 3: Custom Transformer for Temporal DBSCAN Clustering
+class TemporalDBSCAN(BaseEstimator, TransformerMixin):
+    def __init__(self, e_days):
+        self.e_days = e_days
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        X['temporal_cluster_id'] = -1  # Default to unclustered
+
+        for cluster_id in X['spatial_cluster_id'].unique():
+            sub_df = X[X['spatial_cluster_id'] == cluster_id]
+            dates = (sub_df['startdate'] - sub_df['startdate'].min()).dt.days.values.reshape(-1, 1)
+
+            db = DBSCAN(eps=self.e_days, min_samples=1, metric='euclidean')
+            temporal_labels = db.fit_predict(dates)
+            X.loc[sub_df.index, 'temporal_cluster_id'] = temporal_labels
+
+        return X
+
+# Step 4: Custom Transformer to Combine Clusters
+class CombineClusters(BaseEstimator, TransformerMixin):
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        # Save original indices
+        original_indices = X.index
+
+        # Generate unique integer IDs for spatiotemporal clusters
+        cluster_combinations = X[['spatial_cluster_id', 'temporal_cluster_id']].drop_duplicates()
+        cluster_combinations['spatiotemporal_cluster_id'] = range(len(cluster_combinations))
+        X = X.merge(cluster_combinations, on=['spatial_cluster_id', 'temporal_cluster_id'], how='left')
+
+        # Restore original indices
+        X.index = original_indices
+        return X
+
+# Custom scorer for penalized ARI
+# NOTE: This scoring metric isn't really working! Area to work on...
+def partial_ari_with_penalty(true_labels, predicted_labels):
+    """
+    Compute a penalized Adjusted Rand Index for partially labeled data.
+    Penalizes when unlabeled points are assigned the same cluster as labeled points.
+    """
+    # Convert inputs to numpy arrays for easier manipulation
+    true_labels = np.array(true_labels)
+    predicted_labels = np.array(predicted_labels)
+    
+    # Mask for valid (non-NaN) labels
+    valid_mask = ~np.isnan(true_labels) & ~np.isnan(predicted_labels)
+    true_labels_filtered = true_labels[valid_mask]
+    predicted_labels_filtered = predicted_labels[valid_mask]
+    
+    # Compute ARI for the filtered subset
+    if len(true_labels_filtered) == 0 or len(predicted_labels_filtered) == 0:
+        return 0.0  # Return 0 if no valid labels are available
+    
+    ari_score = adjusted_rand_score(true_labels_filtered, predicted_labels_filtered)
+    
+    # Penalize cases where unlabeled rows share cluster IDs with labeled rows
+    labeled_mask = ~np.isnan(true_labels)
+    unlabeled_mask = np.isnan(true_labels)
+    labeled_cluster_ids = set(predicted_labels[labeled_mask])
+    unlabeled_cluster_ids = predicted_labels[unlabeled_mask]
+    penalty_count = sum(cid in labeled_cluster_ids for cid in unlabeled_cluster_ids)
+    
+    # Define a penalty factor (adjustable based on sensitivity)
+    penalty_factor = 100
+    penalty = penalty_factor * penalty_count / len(predicted_labels)
+    
+    # Return the penalized ARI score
+    penalized_score = ari_score - penalty
+    return max(0.0, penalized_score)  # Ensure the score is not negative
+
+# Create a scorer object for GridSearchCV or cross-validation
+penalized_ari_scorer = make_scorer(partial_ari_with_penalty, greater_is_better=True)
+
+# Create the pipeline
+def create_pipeline(e_dist, e_days):
+    pipeline = Pipeline([
+        ('preprocessor', Preprocessor()),
+        ('spatial_dbscan', SpatialDBSCAN(e_dist=e_dist)),
+        ('temporal_dbscan', TemporalDBSCAN(e_days=e_days)),
+        ('combine_clusters', CombineClusters())
+    ])
+    return pipeline
+
+# Custom scorer for GridSearchCV
+# NOTE: Shouldn't be used until scorer is improved
+def cluster_pipeline_scorer(estimator, X, y):
+    """
+    Custom scorer for clustering pipelines that evaluates using `transform` output.
+    """
+    # Transform the data to get the predicted labels
+    transformed = estimator.transform(X)
+    
+    # Align transformed data with X_test's indices
+    transformed = transformed.reindex(X.index)
+    predicted_labels = transformed['spatiotemporal_cluster_id'].values
+    
+    # Ensure `y` is also aligned with X_test
+    y_aligned = y.reindex(X.index).values
+    
+    # Compute the penalized Adjusted Rand Index
+    return partial_ari_with_penalty(y_aligned, predicted_labels)
+
+# Perform K-Fold Analysis
+# NOTE: Shouldn't be used until scorer is improved
+def kfold_analysis(df, e_dist_values, e_days_values):
+    labeled_df = df.dropna(subset=['cluster'])
+    X = labeled_df.drop(columns=['cluster'])
+    y = labeled_df['cluster']
+
+    param_grid = {
+        'spatial_dbscan__e_dist': e_dist_values,
+        'temporal_dbscan__e_days': e_days_values
+    }
+
+    pipeline = create_pipeline(e_dist=0.01, e_days=30)
+
+    grid_search = GridSearchCV(
+        pipeline,
+        param_grid,
+        scoring=cluster_pipeline_scorer,  # Use the updated scorer
+        cv=KFold(n_splits=5, shuffle=True, random_state=42),
+        refit=True
+    )
+
+    grid_search.fit(X, y)
+
+    print("Best parameters:", grid_search.best_params_)
+    print("Best score:", grid_search.best_score_)
+
+    return grid_search.best_estimator_
+
+
+def custom_cv_search(processed_df, pipeline, param_grid, n_clusters=10):
+    """
+    Perform cross-validation search to minimize the average percentage difference
+    between manual and algorithm-determined cluster sizes.
+    
+    Parameters:
+    - processed_df: pd.DataFrame
+        DataFrame containing the clustering results and the `cluster` column.
+    - pipeline: sklearn.pipeline.Pipeline
+        Pipeline to evaluate.
+    - param_grid: dict
+        Dictionary of pipeline parameters to test.
+    - n_clusters: int
+        Number of manual clusters to evaluate.
+    
+    Returns:
+    - best_params: dict
+        Best parameters that minimize the metric.
+    - best_score: float
+        Best average clust_len_diff_perc score.
+    - scores: list
+        List of average scores for each parameter combination.
+    """
+    # Initialize the parameter grid
+    grid = ParameterGrid(param_grid)
+    best_score = float('inf')
+    best_params = None
+    scores = []
+    
+    for params in grid:
+        # Update pipeline parameters
+        pipeline.set_params(**params)
+        
+        # Fit the pipeline and transform the data
+        processed_data = pipeline.fit_transform(processed_df)
+        
+        total_diff_perc = 0
+        
+        for i in range(n_clusters):
+            # Filter manual cluster
+            df1 = processed_data[processed_data['cluster'] == i]
+            
+            if len(df1) == 0:  # Skip if the cluster is empty
+                continue
+            
+            # Get the spatiotemporal_cluster_id for the manual cluster
+            stc_id = df1.iloc[0]['spatiotemporal_cluster_id']
+            
+            # Compute cluster sizes
+            manual_clust_len = len(df1)
+            algo_clust_len = len(processed_data[processed_data['spatiotemporal_cluster_id'] == stc_id])
+            
+            # Compute percentage difference
+            clust_len_diff_perc = abs(manual_clust_len - algo_clust_len) / manual_clust_len
+            total_diff_perc += clust_len_diff_perc
+        
+        # Average percentage difference for this parameter combination
+        avg_diff_perc = total_diff_perc / n_clusters
+        scores.append(avg_diff_perc)
+        
+        # Update best parameters if current score is better
+        if avg_diff_perc < best_score:
+            best_score = avg_diff_perc
+            best_params = params
+    
+    return best_params, best_score, scores
+
+# Example Usage
+param_grid = {
+    'spatial_dbscan__e_dist': [.1, 1, 5, 10, 15, 20],
+    'temporal_dbscan__e_days': [3, 5, 7, 9, 10]
+}
+
+

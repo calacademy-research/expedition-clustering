@@ -1,12 +1,13 @@
-import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+import cartopy.io.shapereader as shpreader
+import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from cartopy.io.shapereader import Reader
-import cartopy.io.shapereader as shpreader
-import matplotlib.colors as mcolors
 from matplotlib.colors import LogNorm
+
 
 def plot_time_histogram(df, datetime_col='datetime', bins='auto'):
     """

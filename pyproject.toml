@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "expedition-clustering"
+version = "0.1.0"
+description = "Spatiotemporal clustering toolkit for the CAS Botany expedition project."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "California Academy of Sciences", email = "collections@calacademy.org" }
+]
+dependencies = [
+    "pymysql",
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "matplotlib",
+    "shapely",
+    "geopandas",
+    "alphashape",
+    "geodatasets",
+    "cryptography",
+    "Levenshtein",
+    "cartopy",
+    "ipywidgets",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["expedition_clustering*"]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6.0",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "ruff>=0.6.0",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 150
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
