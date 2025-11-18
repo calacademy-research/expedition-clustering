@@ -71,7 +71,14 @@ def merge_core_tables(
     event_df = collecting_event_df.loc[:, COLLECTING_EVENT_COLUMNS].copy()
     object_df = collection_object_df.loc[:, COLLECTION_OBJECT_COLUMNS].copy()
     locality_df = locality_df.loc[:, LOCALITY_COLUMNS].copy()
-    geography_df = geography_df.loc[:, GEOGRAPHY_COLUMNS].copy()
+    try:
+        geography_df = geography_df.loc[:, GEOGRAPHY_COLUMNS].copy()
+    except KeyError:
+        missing_cols = [col for col in GEOGRAPHY_COLUMNS if col not in geography_df.columns]
+        raise KeyError(
+            f"Geography DataFrame is missing required columns: {missing_cols}. "
+            "If you're fetching related-only rows and got zero results, try increasing --table-limit or disabling related-only fetching."
+        ) from None
 
     if filter_related:
         event_ids = event_df["CollectingEventID"].dropna().unique()

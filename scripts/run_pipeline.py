@@ -156,6 +156,16 @@ def main() -> None:
         related_only=args.fetch_related_only,
         related_chunk_size=args.related_chunk_size,
     )
+    missing_cols = [
+        name
+        for name in ("collectionobject", "locality", "geography")
+        if name in tables and tables[name].empty
+    ]
+    if missing_cols:
+        logger.warning(
+            "Fetched tables %s returned 0 rows. Consider increasing --table-limit or disabling related-only fetches.",
+            ", ".join(missing_cols),
+        )
     logger.info("Building clean dataframe...")
     clean_df = build_clean_dataframe(
         tables,

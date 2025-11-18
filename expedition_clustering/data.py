@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import logging
 import time
-from typing import Dict, Iterable, Iterator, Mapping, Optional
+from typing import Dict, Iterable, Iterator, Mapping, Optional, Sequence
 
 import pandas as pd
 import pymysql
@@ -111,7 +111,7 @@ def fetch_table_by_ids(
 
     clean_ids = [i for i in ids if pd.notna(i)]
     if not clean_ids:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=columns if isinstance(columns, Sequence) else None)
 
     frames = []
     with db_connection(config) as conn:
