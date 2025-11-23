@@ -70,60 +70,50 @@ This project leverages data science, natural language processing, and clustering
    # docker exec -i exped_cluster_mysql_container mysql -u root -prootpassword exped_cluster_db < data/backup.sql
    ```
 
-4. **Verify installation:**
+4. **Install the package in editable mode** (or use `uv sync --dev`):
    ```bash
-   expedition-cluster --limit 1000
+   pip install -e .
    ```
 
 
 ## Usage
 
-### Quick Start: Run from Command Line
+### Quick Start (CLI)
 
-After installation, use the `expedition-cluster` command:
+The CLI orchestrates every step: download a slice of the database, clean it, and run the spatiotemporal clustering pipeline. The script lives in `scripts/run_pipeline.py`, with a convenience wrapper `scripts/run_pipeline.sh`.
 
 ```bash
-# Basic usage (clusters all specimens with default parameters)
-expedition-cluster
+# Small dry-run on 10k specimens (random sample)
+scripts/run_pipeline.sh --table-limit 10000 --sample 10000 --log-level INFO
 
-# Specify clustering parameters
-expedition-cluster --e-dist 15 --e-days 10
+# Full run with custom epsilons and output path
+python scripts/run_pipeline.py \
+  --e-dist 12 \
+  --e-days 5 \
+  --table-limit 200000 \
+  --sample 0 \
+  --primary-table collectionobject \
+  --output data/clustered_expeditions.csv
 
-# Test with a sample
-expedition-cluster --limit 10000 --output data/test_output.csv
-
-# Full parameter list
-expedition-cluster --help
+# View all options
+python scripts/run_pipeline.py --help
 ```
 
-**Key Parameters:**
-- `--e-dist`: Spatial epsilon in kilometers (default: 10) - maximum distance between specimens in the same cluster
-- `--e-days`: Temporal epsilon in days (default: 7) - maximum time gap between specimens in the same cluster
-- `--limit`: Number of specimens to process (useful for testing)
-- `--batch-size`: Specimens per batch (default: 50000) - lower if running out of memory
-- `--no-batch`: Disable batch processing (only for small datasets <100K)
-- `--output`: Output CSV file path (default: `data/clustered_expeditions.csv`)
-- `--host`, `--user`, `--password`, `--database`: Database connection settings
+**Frequently used flags**
 
-**Memory Management:**
+| Flag | Purpose |
+| --- | --- |
+| `--host/--port/--user/--password/--database` | Database connection settings (defaults match `docker-compose.yml`). |
+| `--table-limit` | Limits the number of rows fetched per table (prevents pulling all million records during experimentation). |
+| `--sample` | Randomly subsample after cleaning; set to `0` or omit to process everything fetched. |
+| `--fetch-related-only / --no-fetch-related-only` | Whether to load only rows related to the limited slice (default: on). |
+| `--primary-table {collectionobject, collectingevent}` | Choose which table to anchor the slice; `collectionobject` ensures we only pull specimens with valid `CollectingEventID`s. |
+| `--no-filter-related` | Disable the second filtering pass that keeps only rows referenced by the loaded events. |
+| `--e-dist`, `--e-days` | Spatial/temporal epsilons for DBSCAN. |
+| `--log-level DEBUG` | Emits per-table timings, row counts, and warnings (e.g., when related fetches fall back to limited mode). |
+| `--output` | Target CSV file (default `data/clustered_output.csv`). |
 
-For large datasets (>100K specimens), **spatial-aware batch processing** is automatically enabled:
-- **Prevents out-of-memory crashes**: Processes data in manageable chunks
-- **Smart batching**: Uses spatial pre-clustering to avoid splitting expeditions across batches
-- **Default batch size**: 50K specimens (~2-4 GB RAM per batch, configurable with `--batch-size`)
-- **Expedition integrity**: Specimens within your `--e-dist` are guaranteed to stay in the same batch
-- See [MEMORY_OPTIMIZATION.md](MEMORY_OPTIMIZATION.md) for algorithm details
-
-**Example Output:**
-```
-============================================================
-Clustering Results:
-  Total specimens: 149622
-  Total expeditions (clusters): 21511
-  Average expedition size: 6.96 specimens
-  Processed in 3 batches
-============================================================
-```
+If the CLI reports that the clean dataframe is empty, try increasing `--table-limit`, switching `--primary-table collectingevent`, disabling related-only mode (`--no-fetch-related-only`), or turning off filtering (`--no-filter-related`) so all specimens of interest make it into the batch.
 
 ### Jupyter Notebooks (Advanced Exploration)
 
@@ -137,56 +127,40 @@ For exploratory analysis and parameter tuning, use the notebooks in order:
 
 ### Python Package (Programmatic Usage)
 
-Use the expedition_clustering package in your own scripts:
+All functionality is available as importable helpers. Typical workflow:
 
 ```python
-from expedition_clustering import create_pipeline, plot_geographical_positions
-import pandas as pd
-import pymysql
-
-# Connect and load data
-conn = pymysql.connect(host='localhost', user='myuser', password='mypassword',
-                       database='exped_cluster_db')
-
-query = """
-    SELECT ce.CollectingEventID as collectingeventid,
-           ce.StartDate as startdate,
-           l.Latitude1 as latitude1,
-           l.Longitude1 as longitude1
-    FROM collectingevent ce
-    INNER JOIN collectionobject co ON ce.CollectingEventID = co.CollectingEventID
-    LEFT JOIN locality l ON ce.LocalityID = l.LocalityID
-    WHERE ce.StartDate IS NOT NULL AND l.Latitude1 IS NOT NULL
-    LIMIT 10000
-"""
-
-df = pd.read_sql_query(query, conn)
-df.columns = df.columns.str.lower()
-df['startdate'] = pd.to_datetime(df['startdate'])
-
-# Run clustering
-pipeline = create_pipeline(e_dist=10, e_days=7)
-clustered = pipeline.fit_transform(df)
-
-print(f"Created {clustered['spatiotemporal_cluster_id'].nunique()} expeditions")
-
-# Visualize results (optional)
-plot_geographical_positions(
-    clustered,
-    lat_col='latitude1',
-    lon_col='longitude1',
-    datetime_col='startdate'
+from expedition_clustering import (
+    DatabaseConfig,
+    build_clean_dataframe,
+    create_pipeline,
+    load_core_tables,
 )
+
+config = DatabaseConfig()
+tables = load_core_tables(
+    config,
+    limit=25000,
+    related_only=True,
+    primary_table="collectionobject",
+)
+clean_df = build_clean_dataframe(tables)
+pipeline = create_pipeline(e_dist=10, e_days=7)
+clustered = pipeline.fit_transform(clean_df)
+print("Expeditions:", clustered["spatiotemporal_cluster_id"].nunique())
 ```
 
-**Available imports:**
-- `create_pipeline` - Build clustering pipeline
-- `plot_geographical_positions`, `plot_geographical_heatmap`, `plot_time_histogram` - Visualization
-- `DatabaseConfig`, `load_core_tables`, `build_clean_dataframe` - Advanced database utilities
+For visual inspection, the package also provides `plot_geographical_positions`, `plot_geographical_heatmap`, and `plot_time_histogram`.
 
-For more advanced usage, see the [notebooks](notebooks/).
+### Development (uv + Ruff)
 
----
+```bash
+uv sync --dev
+uv run ruff check
+uv run ruff format --check  # or just `ruff format`
+```
+
+The CLI emits detailed logs so you can smoke-test changes without a dedicated test suite.
 
 ## Project Structure
 
