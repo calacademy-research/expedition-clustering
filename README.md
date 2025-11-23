@@ -72,7 +72,7 @@ This project leverages data science, natural language processing, and clustering
 
 4. **Verify installation:**
    ```bash
-   python cluster.py --limit 1000
+   expedition-cluster --limit 1000
    ```
 
 
@@ -80,38 +80,48 @@ This project leverages data science, natural language processing, and clustering
 
 ### Quick Start: Run from Command Line
 
-The simplest way to run the clustering pipeline is using the [cluster.py](cluster.py) script:
+After installation, use the `expedition-cluster` command:
 
 ```bash
 # Basic usage (clusters all specimens with default parameters)
-python cluster.py
+expedition-cluster
 
 # Specify clustering parameters
-python cluster.py --e-dist 15 --e-days 10
+expedition-cluster --e-dist 15 --e-days 10
 
 # Test with a sample
-python cluster.py --limit 10000 --output data/test_output.csv
+expedition-cluster --limit 10000 --output data/test_output.csv
 
 # Full parameter list
-python cluster.py --help
+expedition-cluster --help
 ```
 
 **Key Parameters:**
 - `--e-dist`: Spatial epsilon in kilometers (default: 10) - maximum distance between specimens in the same cluster
 - `--e-days`: Temporal epsilon in days (default: 7) - maximum time gap between specimens in the same cluster
 - `--limit`: Number of specimens to process (useful for testing)
+- `--batch-size`: Specimens per batch (default: 50000) - lower if running out of memory
+- `--no-batch`: Disable batch processing (only for small datasets <100K)
 - `--output`: Output CSV file path (default: `data/clustered_expeditions.csv`)
 - `--host`, `--user`, `--password`, `--database`: Database connection settings
+
+**Memory Management:**
+
+For large datasets (>100K specimens), **spatial-aware batch processing** is automatically enabled:
+- **Prevents out-of-memory crashes**: Processes data in manageable chunks
+- **Smart batching**: Uses spatial pre-clustering to avoid splitting expeditions across batches
+- **Default batch size**: 50K specimens (~2-4 GB RAM per batch, configurable with `--batch-size`)
+- **Expedition integrity**: Specimens within your `--e-dist` are guaranteed to stay in the same batch
+- See [MEMORY_OPTIMIZATION.md](MEMORY_OPTIMIZATION.md) for algorithm details
 
 **Example Output:**
 ```
 ============================================================
 Clustering Results:
-  Total specimens: 5000
-  Total expeditions (clusters): 2161
-  Average expedition size: 2.31 specimens
-  Median expedition size: 1 specimens
-  Largest expedition: 111 specimens
+  Total specimens: 149622
+  Total expeditions (clusters): 21511
+  Average expedition size: 6.96 specimens
+  Processed in 3 batches
 ============================================================
 ```
 
@@ -127,18 +137,14 @@ For exploratory analysis and parameter tuning, use the notebooks in order:
 
 ### Python Package (Programmatic Usage)
 
-Install the package and use it in your own scripts:
-
-```bash
-pip install -e .
-```
+Use the expedition_clustering package in your own scripts:
 
 ```python
+from expedition_clustering import create_pipeline, plot_geographical_positions
 import pandas as pd
 import pymysql
-from expedition_clustering import create_pipeline
 
-# Connect to database and load data
+# Connect and load data
 conn = pymysql.connect(host='localhost', user='myuser', password='mypassword',
                        database='exped_cluster_db')
 
@@ -162,10 +168,23 @@ df['startdate'] = pd.to_datetime(df['startdate'])
 pipeline = create_pipeline(e_dist=10, e_days=7)
 clustered = pipeline.fit_transform(df)
 
-print(f"Created {clustered['spatiotemporal_cluster_id'].nunique()} expedition clusters")
+print(f"Created {clustered['spatiotemporal_cluster_id'].nunique()} expeditions")
+
+# Visualize results (optional)
+plot_geographical_positions(
+    clustered,
+    lat_col='latitude1',
+    lon_col='longitude1',
+    datetime_col='startdate'
+)
 ```
 
-For more advanced usage with the built-in data loading utilities, see the [notebooks](notebooks/).
+**Available imports:**
+- `create_pipeline` - Build clustering pipeline
+- `plot_geographical_positions`, `plot_geographical_heatmap`, `plot_time_histogram` - Visualization
+- `DatabaseConfig`, `load_core_tables`, `build_clean_dataframe` - Advanced database utilities
+
+For more advanced usage, see the [notebooks](notebooks/).
 
 ---
 
@@ -173,15 +192,17 @@ For more advanced usage with the built-in data loading utilities, see the [noteb
 
 ```
 expedition-clustering/
-├── cluster.py                      # ⭐ Main CLI tool (start here!)
-├── QUICKSTART.md                   # Quick start guide
-├── README.md                       # Full documentation
+├── GETTING_STARTED.md              # ⭐ 3-step quick start
+├── QUICKSTART.md                   # Detailed beginner guide
+├── README.md                       # Complete documentation
 │
 ├── expedition_clustering/          # Python package
-│   ├── __init__.py                # Package exports
+│   ├── __init__.py                # Package exports (core API)
+│   ├── cli.py                     # Command-line tool
 │   ├── pipeline.py                # Clustering pipeline (DBSCAN)
 │   ├── preprocessing.py           # Data cleaning utilities
-│   └── data.py                    # Database connection utilities
+│   ├── data.py                    # Database connection utilities
+│   └── plotting.py                # Visualization functions
 │
 ├── notebooks/                      # Jupyter notebooks for exploration
 │   ├── 0_table_eda.ipynb          # Database exploration
@@ -190,21 +211,19 @@ expedition-clustering/
 │   ├── 3_secondary_clustering.ipynb     # Refinement
 │   └── 4_determination.ipynb            # Final analysis
 │
-├── plotting.py                     # Visualization utilities
 ├── data/                           # Data files (git-ignored)
-│   ├── clustered_expeditions.csv  # Output from cluster.py
-│   └── *.csv                      # Intermediate/processed data
+│   └── *.csv                      # Input/output CSV files
 │
 ├── docker-compose.yml             # MySQL database setup
 ├── requirements.txt               # Python dependencies
 └── pyproject.toml                 # Package configuration
 ```
 
-**Key Files:**
-- **[cluster.py](cluster.py)**: Single-command clustering tool - this is what you'll use most
-- **[QUICKSTART.md](QUICKSTART.md)**: Step-by-step beginner guide
-- **[expedition_clustering/](expedition_clustering/)**: Reusable Python package for custom workflows
-- **[notebooks/](notebooks/)**: Interactive analysis and parameter tuning  
+**Key Components:**
+- **Command-line tool**: `expedition-cluster` (installed with package)
+- **Python package**: `expedition_clustering` - Import clustering, visualization, and data utilities
+- **Notebooks**: Interactive exploration and analysis
+- **Documentation**: GETTING_STARTED.md → QUICKSTART.md → README.md (increasing detail)  
  
 ---  
  

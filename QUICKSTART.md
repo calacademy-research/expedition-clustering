@@ -5,7 +5,7 @@
 Run expedition clustering in one command:
 
 ```bash
-python cluster.py --limit 10000
+expedition-cluster --limit 10000
 ```
 
 ## What This Does
@@ -37,21 +37,21 @@ The expedition clustering pipeline:
 
 ### Test with a sample
 ```bash
-python cluster.py --limit 5000 --output data/test.csv
+expedition-cluster --limit 5000 --output data/test.csv
 ```
 
 ### Adjust clustering sensitivity
 ```bash
 # Tighter clusters (smaller distances, shorter time gaps)
-python cluster.py --e-dist 5 --e-days 3
+expedition-cluster --e-dist 5 --e-days 3
 
 # Looser clusters (larger distances, longer time gaps)
-python cluster.py --e-dist 20 --e-days 14
+expedition-cluster --e-dist 20 --e-days 14
 ```
 
 ### Process full dataset
 ```bash
-python cluster.py --output data/all_expeditions.csv
+expedition-cluster --output data/all_expeditions.csv
 ```
 **Warning**: Processing 1M+ specimens may take 10-30 minutes depending on your hardware.
 

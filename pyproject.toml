@@ -28,6 +28,9 @@ dependencies = [
     "ipywidgets",
 ]
 
+[project.scripts]
+expedition-cluster = "expedition_clustering.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["expedition_clustering*"]

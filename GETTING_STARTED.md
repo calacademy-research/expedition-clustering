@@ -22,10 +22,10 @@ docker-compose up -d
 ### 3. Run Clustering
 ```bash
 # Test with 5,000 specimens
-python cluster.py --limit 5000
+expedition-cluster --limit 5000
 
 # Full dataset (may take 10-30 minutes)
-python cluster.py
+expedition-cluster
 ```
 
 ## Output
@@ -34,7 +34,7 @@ Results are saved to `data/clustered_expeditions.csv` with a unique `spatiotempo
 
 ## What's Next?
 
-- **Adjust parameters**: `python cluster.py --e-dist 15 --e-days 10`
+- **Adjust parameters**: `expedition-cluster --e-dist 15 --e-days 10`
 - **Read more**: See [QUICKSTART.md](QUICKSTART.md) for detailed guide
 - **Full docs**: See [README.md](README.md) for complete documentation
 - **Explore data**: Open Jupyter notebooks in [notebooks/](notebooks/)
@@ -53,7 +53,7 @@ docker-compose ps  # Verify MySQL is running
 
 ## File Reference
 
-- `cluster.py` - Main clustering script ⭐
+- `expedition-cluster command` - Main clustering script ⭐
 - `expedition_clustering/` - Python package
 - `notebooks/` - Jupyter notebooks for analysis
 - `data/` - Input/output data (git-ignored)
