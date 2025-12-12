@@ -4,7 +4,6 @@ Command-line tool to run expedition clustering on the CAS Botany database.
 
 Features:
 - Automatic batch processing for large datasets
-- Memory-efficient clustering
 - Progress tracking
 
 Usage:
@@ -24,27 +23,31 @@ from sklearn.cluster import DBSCAN
 import numpy as np
 
 from expedition_clustering import create_pipeline
-from expedition_clustering.pipeline import memory_efficient_haversine_dbscan
 
 
 def create_spatial_batches(df, batch_size, e_dist, logger):
     """
     Create batches using spatial pre-clustering to avoid splitting expeditions.
 
-    This uses coarse spatial clustering (2x the target e_dist) to group specimens
+    This uses coarse spatial clustering (same as target e_dist) to group specimens
     that are geographically close, then assigns these groups to batches.
 
     Returns:
         List of DataFrames, one per batch
     """
     logger.info("Creating spatial-aware batches to avoid splitting expeditions...")
-    logger.info("Pre-clustering with eps=%.1f km (2x target distance)...", e_dist * 2)
+    logger.info("Pre-clustering with eps=%.1f km (1x target distance)...", e_dist)
 
-    # Use coarse spatial clustering to identify geographic groups without
-    # materializing all neighbor lists (avoids OOM on large datasets).
+    # Use coarse spatial clustering to identify geographic groups with DBSCAN.
     coords = np.radians(df[['latitude1', 'longitude1']].values.astype(float))
-    coarse_eps = (e_dist * 2) / 6371  # Convert km to radians (Earth radius = 6371 km)
-    df['_spatial_group'] = memory_efficient_haversine_dbscan(coords, coarse_eps, logger=logger)
+    coarse_eps = e_dist / 6371  # Convert km to radians (Earth radius = 6371 km)
+    coarse_dbscan = DBSCAN(
+        eps=coarse_eps,
+        min_samples=1,
+        metric="haversine",
+        algorithm="ball_tree",
+    )
+    df['_spatial_group'] = coarse_dbscan.fit_predict(coords)
 
     num_groups = df['_spatial_group'].nunique()
     logger.info(f"Identified {num_groups} geographic groups")
@@ -54,6 +57,14 @@ def create_spatial_batches(df, batch_size, e_dist, logger):
 
     # Assign groups to batches, trying to balance batch sizes
     group_sizes = df_sorted.groupby('_spatial_group').size().sort_values(ascending=False)
+    largest_group = group_sizes.iloc[0] if not group_sizes.empty else 0
+    if largest_group > batch_size:
+        logger.warning(
+            "Largest spatial pre-cluster has %s specimens (target batch size %s). "
+            "This batch cannot be split without risking expedition splits.",
+            largest_group,
+            batch_size,
+        )
 
     # Greedy bin packing: assign each group to the batch with the most space
     batch_assignments = {}
@@ -83,6 +94,62 @@ def create_spatial_batches(df, batch_size, e_dist, logger):
         logger.info(f"Batch {batch_num + 1}: {len(batch_df)} specimens")
 
     return batches
+
+
+def split_disconnected_spatiotemporal_clusters(df, e_dist, logger):
+    """
+    Ensure each spatiotemporal cluster is a single spatially-connected component.
+
+    If a cluster breaks into multiple components at the spatial epsilon, new
+    spatiotemporal IDs are assigned to the extra components (base ID is kept
+    for the first component).
+    """
+    if df.empty or "spatiotemporal_cluster_id" not in df.columns:
+        return df
+
+    eps_rad = e_dist / 6371
+    next_id = int(df["spatiotemporal_cluster_id"].max()) + 1
+    clusters_split = 0
+    extra_components = 0
+
+    for stc_id in df["spatiotemporal_cluster_id"].unique():
+        mask = df["spatiotemporal_cluster_id"] == stc_id
+        if mask.sum() <= 1:
+            continue
+
+        coords = np.radians(df.loc[mask, ["latitude1", "longitude1"]].values.astype(float))
+        db = DBSCAN(
+            eps=eps_rad,
+            min_samples=1,
+            metric="haversine",
+            algorithm="ball_tree",
+        )
+        comp_labels = db.fit_predict(coords)
+        unique_comps = np.unique(comp_labels)
+
+        if len(unique_comps) == 1:
+            continue
+
+        clusters_split += 1
+        extra_components += len(unique_comps) - 1
+        rows_idx = df.index[mask]
+        base_comp = unique_comps[0]
+
+        for comp in unique_comps:
+            comp_rows = rows_idx[comp_labels == comp]
+            if comp == base_comp:
+                continue
+            df.loc[comp_rows, "spatiotemporal_cluster_id"] = next_id
+            next_id += 1
+
+    if clusters_split:
+        logger.warning(
+            "Split %s disconnected spatiotemporal clusters into %s additional components (eps=%skm)",
+            clusters_split,
+            extra_components,
+            e_dist,
+        )
+    return df
 
 
 def process_batch(df_batch, pipeline, logger, batch_num=None):
@@ -148,6 +215,11 @@ def main():
         help="Disable batch processing (not recommended for datasets >100K specimens)",
     )
     parser.add_argument(
+        "--include-centroids",
+        action="store_true",
+        help="Include specimens using geography centroids when precise coordinates are missing (may include inaccurate data)",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=Path("data/clustered_expeditions.csv"),
@@ -182,8 +254,21 @@ def main():
             port=args.port,
         )
 
-        # Build query
-        query = """
+        # Build query with coordinate filtering based on --include-centroids flag
+        if args.include_centroids:
+            # Include specimens with geography centroids when precise coords are missing
+            logger.info("Including specimens with geography centroids (may contain inaccurate data)")
+            coord_filter = """
+          AND (l.Latitude1 IS NOT NULL OR g.CentroidLat IS NOT NULL)
+          AND (l.Longitude1 IS NOT NULL OR g.CentroidLon IS NOT NULL)"""
+        else:
+            # Default: only use precise locality coordinates
+            logger.info("Using only precise locality coordinates (excluding geography centroids)")
+            coord_filter = """
+          AND l.Latitude1 IS NOT NULL
+          AND l.Longitude1 IS NOT NULL"""
+
+        query = f"""
         SELECT
             ce.CollectingEventID as collectingeventid,
             ce.StartDate as startdate,
@@ -209,9 +294,7 @@ def main():
         INNER JOIN collectionobject co ON ce.CollectingEventID = co.CollectingEventID
         LEFT JOIN locality l ON ce.LocalityID = l.LocalityID
         LEFT JOIN geography g ON l.GeographyID = g.GeographyID
-        WHERE ce.StartDate IS NOT NULL
-          AND (l.Latitude1 IS NOT NULL OR g.CentroidLat IS NOT NULL)
-          AND (l.Longitude1 IS NOT NULL OR g.CentroidLon IS NOT NULL)
+        WHERE ce.StartDate IS NOT NULL{coord_filter}
         """
 
         if args.limit:
@@ -237,9 +320,12 @@ def main():
         df['startdate'] = pd.to_datetime(df['startdate'], errors='coerce')
         df['enddate'] = pd.to_datetime(df['enddate'], errors='coerce')
 
-        # Fill in missing precise coordinates with geography centroids
-        df['latitude1'] = df['latitude1'].fillna(df['centroidlat'])
-        df['longitude1'] = df['longitude1'].fillna(df['centroidlon'])
+        # Fill in missing precise coordinates with geography centroids (only if --include-centroids)
+        if args.include_centroids:
+            df['latitude1'] = df['latitude1'].fillna(df['centroidlat'])
+            df['longitude1'] = df['longitude1'].fillna(df['centroidlon'])
+            logger.info("Filled missing coordinates with %d geography centroids",
+                       df['latitude1'].notna().sum() - (df['latitude1'].notna() & df['centroidlat'].isna()).sum())
 
         # Drop rows without coordinates or dates
         initial_count = len(df)
@@ -303,6 +389,9 @@ def main():
 
             pipeline = create_pipeline(e_dist=args.e_dist, e_days=args.e_days)
             clustered = process_batch(df, pipeline, logger)
+
+        # Post-process to ensure no spatiotemporal cluster spans disconnected spatial components
+        clustered = split_disconnected_spatiotemporal_clusters(clustered, args.e_dist, logger)
 
         # Report results
         num_clusters = clustered['spatiotemporal_cluster_id'].nunique()

@@ -6,57 +6,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.cluster import DBSCAN
 from sklearn.metrics import adjusted_rand_score, make_scorer
 from sklearn.model_selection import GridSearchCV, KFold, ParameterGrid
-from sklearn.neighbors import BallTree
 from sklearn.pipeline import Pipeline
-
-
-def memory_efficient_haversine_dbscan(coords_rad, eps, logger=None):
-    """
-    Connected-components DBSCAN for min_samples=1 that avoids materializing all
-    neighbor lists at once (much lower peak memory for large datasets).
-
-    Parameters
-    ----------
-    coords_rad:
-        Array of shape (n_samples, 2) in radians.
-    eps:
-        Radius in radians.
-    logger:
-        Optional logger for debug output.
-    """
-    n_samples = coords_rad.shape[0]
-    tree = BallTree(coords_rad, metric="haversine")
-    labels = np.full(n_samples, -1, dtype=int)
-    visited = np.zeros(n_samples, dtype=bool)
-    cluster_id = 0
-
-    for i in range(n_samples):
-        if visited[i]:
-            continue
-
-        # Start a new cluster
-        stack = [i]
-        visited[i] = True
-        labels[i] = cluster_id
-
-        while stack:
-            idx = stack.pop()
-            neighbors = tree.query_radius(
-                coords_rad[idx : idx + 1], r=eps, return_distance=False
-            )[0]
-
-            # Only expand to neighbors we have not visited yet
-            new_points = neighbors[~visited[neighbors]]
-            if new_points.size:
-                visited[new_points] = True
-                labels[new_points] = cluster_id
-                stack.extend(new_points.tolist())
-
-        cluster_id += 1
-        if logger and cluster_id % 50000 == 0:
-            logger.debug("Memory-efficient DBSCAN: %s clusters processed", cluster_id)
-
-    return labels
 
 
 # Step 1: Custom Transformer for Preprocessing
@@ -94,9 +44,8 @@ class Preprocessor(BaseEstimator, TransformerMixin):
 
 # Step 2: Custom Transformer for Spatial DBSCAN Clustering
 class SpatialDBSCAN(BaseEstimator, TransformerMixin):
-    def __init__(self, e_dist, memory_threshold=250000):
+    def __init__(self, e_dist):
         self.e_dist = e_dist
-        self.memory_threshold = memory_threshold
 
     def fit(self, X, y=None):
         return self
@@ -106,13 +55,13 @@ class SpatialDBSCAN(BaseEstimator, TransformerMixin):
         coords = np.radians(X[['latitude1', 'longitude1']].values)
         eps_rad = self.e_dist / 6371  # Convert e_dist to radians
 
-        # Use sklearn's DBSCAN for smaller datasets; switch to memory-efficient
-        # connected components for large inputs to avoid OOM.
-        if len(coords) > self.memory_threshold:
-            labels = memory_efficient_haversine_dbscan(coords, eps_rad)
-        else:
-            db = DBSCAN(eps=eps_rad, min_samples=1, metric='haversine')
-            labels = db.fit_predict(coords)
+        db = DBSCAN(
+            eps=eps_rad,
+            min_samples=1,
+            metric='haversine',
+            algorithm='ball_tree',
+        )
+        labels = db.fit_predict(coords)
 
         X['spatial_cluster_id'] = labels
         return X
@@ -127,27 +76,23 @@ class TemporalDBSCAN(BaseEstimator, TransformerMixin):
 
     def transform(self, X):
         X = X.copy()
-        X['temporal_cluster_id'] = -1  # Default to unclustered
 
-        for cluster_id in X['spatial_cluster_id'].unique():
-            sub_df = X[X['spatial_cluster_id'] == cluster_id]
-            sub_df = sub_df.sort_values('startdate')
+        # Initialize to noise; we will fill per spatial cluster
+        X["temporal_cluster_id"] = -1
+        eps_days = float(self.e_days)
 
-            if sub_df.empty:
-                continue
+        for spatial_id in X["spatial_cluster_id"].unique():
+            mask = X["spatial_cluster_id"] == spatial_id
+            times = X.loc[mask, "startdate"].values.astype("datetime64[D]").astype(float).reshape(-1, 1)
 
-            labels = np.zeros(len(sub_df), dtype=int)
-            prev_date = sub_df['startdate'].iloc[0]
-            current_label = 0
-
-            for i in range(1, len(sub_df)):
-                gap_days = (sub_df['startdate'].iloc[i] - prev_date).days
-                if gap_days > self.e_days:
-                    current_label += 1
-                labels[i] = current_label
-                prev_date = sub_df['startdate'].iloc[i]
-
-            X.loc[sub_df.index, 'temporal_cluster_id'] = labels
+            db = DBSCAN(
+                eps=eps_days,
+                min_samples=1,
+                metric="euclidean",
+                algorithm="ball_tree",
+            )
+            temporal_labels = db.fit_predict(times)
+            X.loc[mask, "temporal_cluster_id"] = temporal_labels
 
         return X
 
