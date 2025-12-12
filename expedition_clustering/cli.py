@@ -3,12 +3,12 @@
 Command-line tool to run expedition clustering on the CAS Botany database.
 
 Features:
-- Automatic batch processing for large datasets
+- Full-dataset spatiotemporal clustering
 - Progress tracking
 
 Usage:
     expedition-cluster --output clustered_data.csv
-    expedition-cluster --e-dist 15 --e-days 10 --batch-size 50000
+    expedition-cluster --e-dist 15 --e-days 10
 """
 
 import argparse
@@ -18,82 +18,10 @@ from pathlib import Path
 
 import pandas as pd
 import pymysql
+import numpy as np
 from sklearn.cluster import DBSCAN
 
-import numpy as np
-
 from expedition_clustering import create_pipeline
-
-
-def create_spatial_batches(df, batch_size, e_dist, logger):
-    """
-    Create batches using spatial pre-clustering to avoid splitting expeditions.
-
-    This uses coarse spatial clustering (same as target e_dist) to group specimens
-    that are geographically close, then assigns these groups to batches.
-
-    Returns:
-        List of DataFrames, one per batch
-    """
-    logger.info("Creating spatial-aware batches to avoid splitting expeditions...")
-    logger.info("Pre-clustering with eps=%.1f km (1x target distance)...", e_dist)
-
-    # Use coarse spatial clustering to identify geographic groups with DBSCAN.
-    coords = np.radians(df[['latitude1', 'longitude1']].values.astype(float))
-    coarse_eps = e_dist / 6371  # Convert km to radians (Earth radius = 6371 km)
-    coarse_dbscan = DBSCAN(
-        eps=coarse_eps,
-        min_samples=1,
-        metric="haversine",
-        algorithm="ball_tree",
-    )
-    df['_spatial_group'] = coarse_dbscan.fit_predict(coords)
-
-    num_groups = df['_spatial_group'].nunique()
-    logger.info(f"Identified {num_groups} geographic groups")
-
-    # Sort by spatial group to keep groups together
-    df_sorted = df.sort_values('_spatial_group').reset_index(drop=True)
-
-    # Assign groups to batches, trying to balance batch sizes
-    group_sizes = df_sorted.groupby('_spatial_group').size().sort_values(ascending=False)
-    largest_group = group_sizes.iloc[0] if not group_sizes.empty else 0
-    if largest_group > batch_size:
-        logger.warning(
-            "Largest spatial pre-cluster has %s specimens (target batch size %s). "
-            "This batch cannot be split without risking expedition splits.",
-            largest_group,
-            batch_size,
-        )
-
-    # Greedy bin packing: assign each group to the batch with the most space
-    batch_assignments = {}
-    batch_sizes = {}
-    num_batches = max(1, (len(df) + batch_size - 1) // batch_size)
-
-    for batch_num in range(num_batches):
-        batch_sizes[batch_num] = 0
-
-    for group_id, size in group_sizes.items():
-        # Find batch with most remaining space
-        available_space = {b: batch_size - batch_sizes[b] for b in batch_sizes}
-        target_batch = max(available_space, key=available_space.get)
-
-        batch_assignments[group_id] = target_batch
-        batch_sizes[target_batch] += size
-
-    # Assign batch numbers to specimens
-    df_sorted['_batch_num'] = df_sorted['_spatial_group'].map(batch_assignments)
-
-    # Create batch DataFrames
-    batches = []
-    for batch_num in sorted(df_sorted['_batch_num'].unique()):
-        batch_df = df_sorted[df_sorted['_batch_num'] == batch_num].copy()
-        batch_df = batch_df.drop(columns=['_spatial_group', '_batch_num'])
-        batches.append(batch_df)
-        logger.info(f"Batch {batch_num + 1}: {len(batch_df)} specimens")
-
-    return batches
 
 
 def split_disconnected_spatiotemporal_clusters(df, e_dist, logger):
@@ -154,21 +82,19 @@ def split_disconnected_spatiotemporal_clusters(df, e_dist, logger):
 
 def process_batch(df_batch, pipeline, logger, batch_num=None):
     """Process a single batch of specimens through the clustering pipeline."""
-    batch_desc = f" (batch {batch_num})" if batch_num is not None else ""
-    logger.info(f"Processing {len(df_batch)} specimens{batch_desc}...")
+    logger.info(f"Processing {len(df_batch)} specimens...")
 
     try:
         clustered = pipeline.fit_transform(df_batch)
         return clustered
     except MemoryError:
-        logger.error(f"Out of memory processing batch{batch_desc}. Try reducing --batch-size.")
+        logger.error("Out of memory processing dataset. Consider reducing --limit.")
         raise
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Cluster botanical specimens into expeditions using spatiotemporal DBSCAN",
-        epilog="For large datasets (>100K specimens), batch processing is automatically enabled."
+        description="Cluster botanical specimens into expeditions using spatiotemporal DBSCAN"
     )
 
     # Database connection
@@ -202,17 +128,6 @@ def main():
         type=int,
         default=None,
         help="Limit number of specimens to process (for testing)",
-    )
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=50000,
-        help="Number of specimens to process per batch (default: 50000). Lower this if running out of memory.",
-    )
-    parser.add_argument(
-        "--no-batch",
-        action="store_true",
-        help="Disable batch processing (not recommended for datasets >100K specimens)",
     )
     parser.add_argument(
         "--include-centroids",
@@ -342,53 +257,12 @@ def main():
         total_specimens = len(df)
         logger.info("Processing %d specimens...", total_specimens)
 
-        # Determine if batch processing is needed
-        use_batching = not args.no_batch and (total_specimens > 100000 or args.limit is None)
+        logger.info("Processing entire dataset in a single pass...")
+        logger.info("Running spatiotemporal clustering (e_dist=%skm, e_days=%s days)...",
+                    args.e_dist, args.e_days)
 
-        if use_batching:
-            logger.info("Using spatial-aware batch processing (target batch size: %d specimens)", args.batch_size)
-            logger.info("Batches are created using spatial pre-clustering to avoid splitting expeditions.")
-
-            # Create spatial-aware batches
-            batches = create_spatial_batches(df, args.batch_size, args.e_dist, logger)
-            num_batches = len(batches)
-
-            # Process each batch
-            all_results = []
-            for batch_num, batch_df in enumerate(batches, start=1):
-                logger.info(f"\n{'='*60}")
-                logger.info(f"Batch {batch_num}/{num_batches}")
-                logger.info(f"{'='*60}")
-
-                # Create pipeline for this batch
-                pipeline = create_pipeline(e_dist=args.e_dist, e_days=args.e_days)
-
-                # Process batch
-                clustered_batch = process_batch(batch_df, pipeline, logger, batch_num)
-
-                # Add batch number to cluster IDs to make them unique across batches
-                if 'spatiotemporal_cluster_id' in clustered_batch.columns:
-                    clustered_batch['spatiotemporal_cluster_id'] += (batch_num - 1) * 1000000
-                    clustered_batch['batch_number'] = batch_num
-
-                all_results.append(clustered_batch)
-
-                # Report batch results
-                batch_clusters = clustered_batch['spatiotemporal_cluster_id'].nunique()
-                logger.info(f"Batch {batch_num} complete: {len(clustered_batch)} specimens → {batch_clusters} expeditions")
-
-            # Combine all batches
-            logger.info("\nCombining all batches...")
-            clustered = pd.concat(all_results, ignore_index=True)
-
-        else:
-            # Single-batch processing
-            logger.info("Processing entire dataset in a single pass...")
-            logger.info("Running spatiotemporal clustering (e_dist=%skm, e_days=%s days)...",
-                       args.e_dist, args.e_days)
-
-            pipeline = create_pipeline(e_dist=args.e_dist, e_days=args.e_days)
-            clustered = process_batch(df, pipeline, logger)
+        pipeline = create_pipeline(e_dist=args.e_dist, e_days=args.e_days)
+        clustered = process_batch(df, pipeline, logger)
 
         # Post-process to ensure no spatiotemporal cluster spans disconnected spatial components
         clustered = split_disconnected_spatiotemporal_clusters(clustered, args.e_dist, logger)
@@ -406,8 +280,6 @@ def main():
         logger.info("  Median expedition size: %.0f specimens", cluster_sizes.median())
         logger.info("  Largest expedition: %d specimens", cluster_sizes.max())
         logger.info("  Smallest expedition: %d specimens", cluster_sizes.min())
-        if use_batching:
-            logger.info("  Processed in %d batches", num_batches)
         logger.info("=" * 60)
 
         # Save results
@@ -421,8 +293,6 @@ def main():
         logger.info("\nSample of results (first 10 rows):")
         sample_cols = ['collectingeventid', 'collectionobjectid', 'latitude1', 'longitude1',
                       'startdate', 'spatiotemporal_cluster_id']
-        if 'batch_number' in clustered.columns:
-            sample_cols.append('batch_number')
         print(clustered[sample_cols].head(10).to_string(index=False))
 
         logger.info("\n✓ Clustering completed successfully!")
@@ -434,10 +304,9 @@ def main():
 
     except MemoryError as e:
         logger.error("Out of memory! Try one of these solutions:")
-        logger.error("  1. Reduce --batch-size (current: %d)", args.batch_size)
-        logger.error("  2. Use --limit to process fewer specimens")
-        logger.error("  3. Add geographic/temporal filters to the query")
-        logger.error("  4. Use a machine with more RAM")
+        logger.error("  1. Use --limit to process fewer specimens")
+        logger.error("  2. Add geographic/temporal filters to the query")
+        logger.error("  3. Use a machine with more RAM")
         sys.exit(1)
 
     except Exception as e:
