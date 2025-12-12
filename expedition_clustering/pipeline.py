@@ -7,7 +7,7 @@ from sklearn.cluster import DBSCAN
 from sklearn.metrics import adjusted_rand_score, make_scorer
 from sklearn.model_selection import GridSearchCV, KFold, ParameterGrid
 from sklearn.pipeline import Pipeline
-
+from sklearn.neighbors import BallTree
 
 # Step 1: Custom Transformer for Preprocessing
 class Preprocessor(BaseEstimator, TransformerMixin):
@@ -52,6 +52,9 @@ class SpatialDBSCAN(BaseEstimator, TransformerMixin):
 
     def transform(self, X):
         X = X.copy()
+        # Coerce coordinates to numeric early to avoid string/object dtype surprises
+        X["latitude1"] = pd.to_numeric(X["latitude1"], errors="coerce")
+        X["longitude1"] = pd.to_numeric(X["longitude1"], errors="coerce")
         coords = np.radians(X[['latitude1', 'longitude1']].values)
         eps_rad = self.e_dist / 6371  # Convert e_dist to radians
 
@@ -115,6 +118,122 @@ class CombineClusters(BaseEstimator, TransformerMixin):
         X.index = original_indices
         return X
 
+
+class ValidateSpatiotemporalConnectivity(BaseEstimator, TransformerMixin):
+    """
+    Validate that each spatiotemporal cluster is both spatially and temporally
+    connected using the configured epsilons.
+
+    Raises ValueError if any cluster fails the connectivity checks.
+    """
+
+    def __init__(self, e_dist, e_days):
+        self.e_dist = e_dist
+        self.e_days = e_days
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        X = X.copy()
+        if "spatiotemporal_cluster_id" not in X.columns:
+            return X
+
+        eps_rad = self.e_dist / 6371
+        time_eps = float(self.e_days)
+        spatial_bad = []
+        temporal_bad = []
+
+        for stc_id, sub in X.groupby("spatiotemporal_cluster_id"):
+            if len(sub) <= 1:
+                continue
+            coords = np.radians(sub[["latitude1", "longitude1"]].astype(float).to_numpy())
+            labels = DBSCAN(
+                eps=eps_rad,
+                min_samples=1,
+                metric="haversine",
+                algorithm="ball_tree",
+            ).fit_predict(coords)
+            if labels.max() > 0:
+                spatial_bad.append((stc_id, int(labels.max() + 1), len(sub)))
+
+            # Temporal connectivity on 1D day offsets
+            times = sub["startdate"].to_numpy(dtype="datetime64[D]").astype(float).reshape(-1, 1)
+            if np.isnan(times).all():
+                continue
+            t_labels = DBSCAN(
+                eps=time_eps,
+                min_samples=1,
+                metric="euclidean",
+                algorithm="ball_tree",
+            ).fit_predict(times)
+            if t_labels.max() > 0:
+                temporal_bad.append((stc_id, int(t_labels.max() + 1), len(sub)))
+
+        if spatial_bad or temporal_bad:
+            parts = []
+            if spatial_bad:
+                sample = ", ".join(
+                    f"id={cid} comps={comps} size={n}" for cid, comps, n in spatial_bad[:10]
+                )
+                parts.append(
+                    f"{len(spatial_bad)} clusters spatially disconnected at e_dist={self.e_dist}km (examples: {sample})"
+                )
+            if temporal_bad:
+                sample = ", ".join(
+                    f"id={cid} comps={comps} size={n}" for cid, comps, n in temporal_bad[:10]
+                )
+                parts.append(
+                    f"{len(temporal_bad)} clusters temporally disconnected at e_days={self.e_days} (examples: {sample})"
+                )
+            raise ValueError("; ".join(parts))
+        return X
+
+
+class SpatialReconnectWithinTemporal(BaseEstimator, TransformerMixin):
+    """
+    After temporal clustering, re-run spatial DBSCAN inside each
+    (spatial_cluster_id, temporal_cluster_id) to break apart any spatially
+    disconnected blobs, then update spatial_cluster_id accordingly.
+    """
+
+    def __init__(self, e_dist):
+        self.e_dist = e_dist
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        X = X.copy()
+        eps_rad = self.e_dist / 6371
+        labels = X["spatial_cluster_id"].to_numpy()
+        next_label = int(labels.max()) + 1 if labels.size else 0
+
+        for (sp_id, t_id), sub in X.groupby(["spatial_cluster_id", "temporal_cluster_id"]):
+            if len(sub) <= 1:
+                continue
+            coords = np.radians(sub[["latitude1", "longitude1"]].astype(float).to_numpy())
+            comp_labels = DBSCAN(
+                eps=eps_rad,
+                min_samples=1,
+                metric="haversine",
+                algorithm="ball_tree",
+            ).fit_predict(coords)
+            unique = np.unique(comp_labels)
+            if len(unique) == 1:
+                continue
+
+            base = unique[0]
+            idxs = sub.index.to_numpy()
+            for comp in unique:
+                comp_rows = idxs[comp_labels == comp]
+                if comp == base:
+                    continue
+                X.loc[comp_rows, "spatial_cluster_id"] = next_label
+                next_label += 1
+
+        return X
+
 # Custom scorer for penalized ARI
 # NOTE: This scoring metric isn't really working! Area to work on...
 def partial_ari_with_penalty(true_labels, predicted_labels):
@@ -161,7 +280,9 @@ def create_pipeline(e_dist, e_days):
         ('preprocessor', Preprocessor()),
         ('spatial_dbscan', SpatialDBSCAN(e_dist=e_dist)),
         ('temporal_dbscan', TemporalDBSCAN(e_days=e_days)),
-        ('combine_clusters', CombineClusters())
+        ('spatial_reconnect', SpatialReconnectWithinTemporal(e_dist=e_dist)),
+        ('combine_clusters', CombineClusters()),
+        ('validate_connectivity', ValidateSpatiotemporalConnectivity(e_dist=e_dist, e_days=e_days)),
     ])
     return pipeline
 

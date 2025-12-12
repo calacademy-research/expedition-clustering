@@ -47,6 +47,8 @@ from .pipeline import (
     Preprocessor,
     SpatialDBSCAN,
     TemporalDBSCAN,
+    SpatialReconnectWithinTemporal,
+    ValidateSpatiotemporalConnectivity,
 )
 
 # Evaluation utilities (experimental, not recommended for production)
@@ -79,6 +81,8 @@ __all__ = [
     "Preprocessor",
     "SpatialDBSCAN",
     "TemporalDBSCAN",
+    "SpatialReconnectWithinTemporal",
+    "ValidateSpatiotemporalConnectivity",
     # Evaluation (experimental)
     "cluster_pipeline_scorer",
     "custom_cv_search",

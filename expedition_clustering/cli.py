@@ -19,65 +19,7 @@ from pathlib import Path
 import pandas as pd
 import pymysql
 import numpy as np
-from sklearn.cluster import DBSCAN
-
 from expedition_clustering import create_pipeline
-
-
-def split_disconnected_spatiotemporal_clusters(df, e_dist, logger):
-    """
-    Ensure each spatiotemporal cluster is a single spatially-connected component.
-
-    If a cluster breaks into multiple components at the spatial epsilon, new
-    spatiotemporal IDs are assigned to the extra components (base ID is kept
-    for the first component).
-    """
-    if df.empty or "spatiotemporal_cluster_id" not in df.columns:
-        return df
-
-    eps_rad = e_dist / 6371
-    next_id = int(df["spatiotemporal_cluster_id"].max()) + 1
-    clusters_split = 0
-    extra_components = 0
-
-    for stc_id in df["spatiotemporal_cluster_id"].unique():
-        mask = df["spatiotemporal_cluster_id"] == stc_id
-        if mask.sum() <= 1:
-            continue
-
-        coords = np.radians(df.loc[mask, ["latitude1", "longitude1"]].values.astype(float))
-        db = DBSCAN(
-            eps=eps_rad,
-            min_samples=1,
-            metric="haversine",
-            algorithm="ball_tree",
-        )
-        comp_labels = db.fit_predict(coords)
-        unique_comps = np.unique(comp_labels)
-
-        if len(unique_comps) == 1:
-            continue
-
-        clusters_split += 1
-        extra_components += len(unique_comps) - 1
-        rows_idx = df.index[mask]
-        base_comp = unique_comps[0]
-
-        for comp in unique_comps:
-            comp_rows = rows_idx[comp_labels == comp]
-            if comp == base_comp:
-                continue
-            df.loc[comp_rows, "spatiotemporal_cluster_id"] = next_id
-            next_id += 1
-
-    if clusters_split:
-        logger.warning(
-            "Split %s disconnected spatiotemporal clusters into %s additional components (eps=%skm)",
-            clusters_split,
-            extra_components,
-            e_dist,
-        )
-    return df
 
 
 def process_batch(df_batch, pipeline, logger, batch_num=None):
@@ -263,9 +205,6 @@ def main():
 
         pipeline = create_pipeline(e_dist=args.e_dist, e_days=args.e_days)
         clustered = process_batch(df, pipeline, logger)
-
-        # Post-process to ensure no spatiotemporal cluster spans disconnected spatial components
-        clustered = split_disconnected_spatiotemporal_clusters(clustered, args.e_dist, logger)
 
         # Report results
         num_clusters = clustered['spatiotemporal_cluster_id'].nunique()
