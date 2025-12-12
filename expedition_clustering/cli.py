@@ -17,12 +17,14 @@ import logging
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pymysql
 from sklearn.cluster import DBSCAN
 
+import numpy as np
+
 from expedition_clustering import create_pipeline
+from expedition_clustering.pipeline import memory_efficient_haversine_dbscan
 
 
 def create_spatial_batches(df, batch_size, e_dist, logger):
@@ -38,14 +40,11 @@ def create_spatial_batches(df, batch_size, e_dist, logger):
     logger.info("Creating spatial-aware batches to avoid splitting expeditions...")
     logger.info("Pre-clustering with eps=%.1f km (2x target distance)...", e_dist * 2)
 
-    # Use coarse spatial clustering to identify geographic groups
-    # We use 2x the target e_dist to ensure specimens within e_dist stay together
-    coords = np.radians(df[['latitude1', 'longitude1']].values)
+    # Use coarse spatial clustering to identify geographic groups without
+    # materializing all neighbor lists (avoids OOM on large datasets).
+    coords = np.radians(df[['latitude1', 'longitude1']].values.astype(float))
     coarse_eps = (e_dist * 2) / 6371  # Convert km to radians (Earth radius = 6371 km)
-
-    # DBSCAN with larger epsilon to create geographic super-clusters
-    spatial_pre_cluster = DBSCAN(eps=coarse_eps, min_samples=1, metric='haversine')
-    df['_spatial_group'] = spatial_pre_cluster.fit_predict(coords)
+    df['_spatial_group'] = memory_efficient_haversine_dbscan(coords, coarse_eps, logger=logger)
 
     num_groups = df['_spatial_group'].nunique()
     logger.info(f"Identified {num_groups} geographic groups")

@@ -60,7 +60,6 @@ This project leverages data science, natural language processing, and clustering
    python -m venv .venv
    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
    pip install -r requirements.txt
-   pip install -e .  # Install the package in editable mode
    ```
 
 3. **Start the database:**
@@ -78,42 +77,46 @@ This project leverages data science, natural language processing, and clustering
 
 ## Usage
 
-### Quick Start (CLI)
+### Quick Start (Programmatic)
 
-The CLI orchestrates every step: download a slice of the database, clean it, and run the spatiotemporal clustering pipeline. The script lives in `scripts/run_pipeline.py`, with a convenience wrapper `scripts/run_pipeline.sh`.
+Run the pipeline in three steps (mirrors GETTING_STARTED/QUICKSTART):
 
-```bash
-# Small dry-run on 10k specimens (random sample)
-scripts/run_pipeline.sh --table-limit 10000 --sample 10000 --log-level INFO
+1. **Install & start DB**
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate  # Windows: .venv\Scripts\activate
+   pip install -r requirements.txt
+   pip install -e .
+   docker-compose up -d
+   ```
 
-# Full run with custom epsilons and output path
-python scripts/run_pipeline.py \
-  --e-dist 12 \
-  --e-days 5 \
-  --table-limit 200000 \
-  --sample 0 \
-  --primary-table collectionobject \
-  --output data/clustered_expeditions.csv
+2. **Cluster a slice**
+   ```python
+   from expedition_clustering import (
+       DatabaseConfig,
+       build_clean_dataframe,
+       create_pipeline,
+       load_core_tables,
+   )
 
-# View all options
-python scripts/run_pipeline.py --help
-```
+   config = DatabaseConfig()  # defaults match docker-compose.yml
+   tables = load_core_tables(
+       config,
+       limit=5000,              # cap rows per table for a quick test
+       related_only=True,
+       primary_table="collectionobject",
+   )
 
-**Frequently used flags**
+   clean_df = build_clean_dataframe(tables)
+   pipeline = create_pipeline(e_dist=10, e_days=7)
+   clustered = pipeline.fit_transform(clean_df)
+   clustered.to_csv("data/clustered_expeditions.csv", index=False)
+   print("Expeditions:", clustered["spatiotemporal_cluster_id"].nunique())
+   ```
 
-| Flag | Purpose |
-| --- | --- |
-| `--host/--port/--user/--password/--database` | Database connection settings (defaults match `docker-compose.yml`). |
-| `--table-limit` | Limits the number of rows fetched per table (prevents pulling all million records during experimentation). |
-| `--sample` | Randomly subsample after cleaning; set to `0` or omit to process everything fetched. |
-| `--fetch-related-only / --no-fetch-related-only` | Whether to load only rows related to the limited slice (default: on). |
-| `--primary-table {collectionobject, collectingevent}` | Choose which table to anchor the slice; `collectionobject` ensures we only pull specimens with valid `CollectingEventID`s. |
-| `--no-filter-related` | Disable the second filtering pass that keeps only rows referenced by the loaded events. |
-| `--e-dist`, `--e-days` | Spatial/temporal epsilons for DBSCAN. |
-| `--log-level DEBUG` | Emits per-table timings, row counts, and warnings (e.g., when related fetches fall back to limited mode). |
-| `--output` | Target CSV file (default `data/clustered_output.csv`). |
+3. **Scale up** by raising `limit` (or disabling related-only filtering) once the small run succeeds.
 
-If the CLI reports that the clean dataframe is empty, try increasing `--table-limit`, switching `--primary-table collectingevent`, disabling related-only mode (`--no-fetch-related-only`), or turning off filtering (`--no-filter-related`) so all specimens of interest make it into the batch.
+If `clean_df` is empty, increase `limit`, switch `primary_table="collectingevent"`, or call `load_core_tables(..., related_only=False)` / `build_clean_dataframe(..., filter_related=False)` to include more rows.
 
 ### Jupyter Notebooks (Advanced Exploration)
 
@@ -160,44 +163,34 @@ uv run ruff check
 uv run ruff format --check  # or just `ruff format`
 ```
 
-The CLI emits detailed logs so you can smoke-test changes without a dedicated test suite.
+Use `uv run python ...` for running your own scripts during development; the pipeline emits detailed logs for quick sanity checks.
 
 ## Project Structure
 
 ```
 expedition-clustering/
-├── GETTING_STARTED.md              # ⭐ 3-step quick start
-├── QUICKSTART.md                   # Detailed beginner guide
-├── README.md                       # Complete documentation
-│
-├── expedition_clustering/          # Python package
-│   ├── __init__.py                # Package exports (core API)
-│   ├── cli.py                     # Command-line tool
-│   ├── pipeline.py                # Clustering pipeline (DBSCAN)
-│   ├── preprocessing.py           # Data cleaning utilities
-│   ├── data.py                    # Database connection utilities
-│   └── plotting.py                # Visualization functions
-│
-├── notebooks/                      # Jupyter notebooks for exploration
-│   ├── 0_table_eda.ipynb          # Database exploration
-│   ├── 1_manual_cluster_labeling.ipynb  # Validation
-│   ├── 2_spatiotemporal_clustering_algorithm.ipynb  # Main analysis
-│   ├── 3_secondary_clustering.ipynb     # Refinement
-│   └── 4_determination.ipynb            # Final analysis
-│
-├── data/                           # Data files (git-ignored)
-│   └── *.csv                      # Input/output CSV files
-│
+├── README.md
+├── pyproject.toml                 # Package metadata + dev tooling
+├── requirements.txt               # Dependency list (mirrors pyproject)
 ├── docker-compose.yml             # MySQL database setup
-├── requirements.txt               # Python dependencies
-└── pyproject.toml                 # Package configuration
+├── expedition_clustering/         # Python package
+│   ├── __init__.py
+│   ├── data.py                    # DB helpers
+│   ├── preprocessing.py           # Data merging/cleaning
+│   ├── pipeline.py                # Spatiotemporal DBSCAN pipeline
+│   └── plotting.py                # Visualization helpers
+├── notebooks/                     # Jupyter notebooks for exploration
+│   ├── 0_table_eda.ipynb
+│   ├── 1_manual_cluster_labeling.ipynb
+│   ├── 2_spatiotemporal_clustering_algorithm.ipynb
+│   ├── 3_secondary_clustering.ipynb
+│   └── 4_determination.ipynb
+└── data/                          # Local datasets and outputs (git-ignored)
 ```
 
 **Key Components:**
-- **Command-line tool**: `expedition-cluster` (installed with package)
-- **Python package**: `expedition_clustering` - Import clustering, visualization, and data utilities
-- **Notebooks**: Interactive exploration and analysis
-- **Documentation**: GETTING_STARTED.md → QUICKSTART.md → README.md (increasing detail)  
+- Python package: `expedition_clustering` (clustering, preprocessing, plotting, DB helpers)
+- Notebooks: interactive exploration and analysis
  
 ---  
  
