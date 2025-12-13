@@ -48,7 +48,7 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-3) Start MySQL (matches docker-compose defaults: host=localhost, user=myuser, password=examplepw, db=exped_cluster_db)
+3) Start MySQL (matches docker-compose defaults: host=localhost, user=myuser, password=mypassword, db=exped_cluster_db)
 ```bash
 docker-compose up -d
 # Load your dump if needed:
