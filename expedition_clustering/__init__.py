@@ -46,8 +46,12 @@ from .pipeline import (
     CombineClusters,
     Preprocessor,
     SpatialDBSCAN,
+    TemporalDBSCANRecompute,
     TemporalDBSCAN,
     SpatialReconnectWithinTemporal,
+    SpatialReconnectWithinSpatiotemporal,
+    TemporalReconnectWithinSpatiotemporal,
+    IterativeSpatiotemporalClustering,
     ValidateSpatiotemporalConnectivity,
 )
 
@@ -80,8 +84,12 @@ __all__ = [
     "CombineClusters",
     "Preprocessor",
     "SpatialDBSCAN",
+    "TemporalDBSCANRecompute",
     "TemporalDBSCAN",
     "SpatialReconnectWithinTemporal",
+    "SpatialReconnectWithinSpatiotemporal",
+    "TemporalReconnectWithinSpatiotemporal",
+    "IterativeSpatiotemporalClustering",
     "ValidateSpatiotemporalConnectivity",
     # Evaluation (experimental)
     "cluster_pipeline_scorer",

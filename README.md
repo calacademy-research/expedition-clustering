@@ -33,11 +33,11 @@ This project leverages data science, natural language processing, and clustering
 ---
 
 ## Features  
-✅ **Spatiotemporal Clustering** – Groups specimens into expeditions based on collection locations and dates.  
-✅ **Machine Learning Integration** – Applies clustering algorithms and NLP techniques for automated classification.  
-✅ **Data Visualization** – Generates interactive maps and plots for understanding collection trends.  
-✅ **Reproducible Workflow** – Supports automation and scalability through Python scripts and Jupyter notebooks.  
-✅ **Open Source** – Designed to be extensible for research and educational purposes.  
+✅ **Spatiotemporal DBSCAN** – Haversine spatial DBSCAN + per-spatial temporal DBSCAN with a safety reconnect to prevent spatially disconnected clusters after time-slicing.  
+✅ **End-to-end Pipeline** – `create_pipeline(e_dist, e_days)` returns a ready-to-run sklearn pipeline.  
+✅ **Database Helpers** – `DatabaseConfig`, `load_core_tables`, and preprocessing utilities mirror the notebook cleaning steps.  
+✅ **Visualizations** – Mapping and temporal histogram helpers for inspection.  
+✅ **uv-first workflow** – `uv run expedition-cluster ...` CLI plus notebooks for deeper exploration.  
 
 ---
 
@@ -79,54 +79,49 @@ This project leverages data science, natural language processing, and clustering
 
 ### Quick Start (Programmatic)
 
-Run the pipeline in three steps (mirrors GETTING_STARTED/QUICKSTART):
+1) **Install & start DB**
+```bash
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+uv pip install -r requirements.txt
+uv pip install -e .
+docker-compose up -d
+```
 
-1. **Install & start DB**
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # Windows: .venv\Scripts\activate
-   pip install -r requirements.txt
-   pip install -e .
-   docker-compose up -d
-   ```
+2) **Cluster a slice**
+```python
+from expedition_clustering import (
+    DatabaseConfig,
+    build_clean_dataframe,
+    create_pipeline,
+    load_core_tables,
+)
 
-2. **Cluster a slice**
-   ```python
-   from expedition_clustering import (
-       DatabaseConfig,
-       build_clean_dataframe,
-       create_pipeline,
-       load_core_tables,
-   )
+config = DatabaseConfig()  # defaults match docker-compose.yml
+tables = load_core_tables(
+    config,
+    limit=5000,              # cap rows per table for a quick test
+    related_only=True,
+    primary_table="collectionobject",
+)
 
-   config = DatabaseConfig()  # defaults match docker-compose.yml
-   tables = load_core_tables(
-       config,
-       limit=5000,              # cap rows per table for a quick test
-       related_only=True,
-       primary_table="collectionobject",
-   )
+clean_df = build_clean_dataframe(tables)
+pipeline = create_pipeline(e_dist=10, e_days=7)
+clustered = pipeline.fit_transform(clean_df)
+clustered.to_csv("data/clustered_expeditions.csv", index=False)
+print("Expeditions:", clustered["spatiotemporal_cluster_id"].nunique())
+```
 
-   clean_df = build_clean_dataframe(tables)
-   pipeline = create_pipeline(e_dist=10, e_days=7)
-   clustered = pipeline.fit_transform(clean_df)
-   clustered.to_csv("data/clustered_expeditions.csv", index=False)
-   print("Expeditions:", clustered["spatiotemporal_cluster_id"].nunique())
-   ```
-
-3. **Scale up** by raising `limit` (or disabling related-only filtering) once the small run succeeds.
+3) **Scale up** by raising `limit` (or disabling related-only filtering) once the small run succeeds.
 
 If `clean_df` is empty, increase `limit`, switch `primary_table="collectingevent"`, or call `load_core_tables(..., related_only=False)` / `build_clean_dataframe(..., filter_related=False)` to include more rows.
 
 ### Jupyter Notebooks (Advanced Exploration)
 
-For exploratory analysis and parameter tuning, use the notebooks in order:
-
-1. [0_table_eda.ipynb](notebooks/0_table_eda.ipynb) - Explore database structure
-2. [1_manual_cluster_labeling.ipynb](notebooks/1_manual_cluster_labeling.ipynb) - Manual validation
-3. [2_spatiotemporal_clustering_algorithm.ipynb](notebooks/2_spatiotemporal_clustering_algorithm.ipynb) - Main clustering
-4. [3_secondary_clustering.ipynb](notebooks/3_secondary_clustering.ipynb) - Refinement
-5. [4_determination.ipynb](notebooks/4_determination.ipynb) - Final analysis
+Key notebooks for debugging/inspection:
+- `notebooks/debug_dbscan.ipynb`: step-through of spatial DBSCAN → temporal DBSCAN → reconnect → validation.
+- `notebooks/0_table_eda.ipynb`: Explore database structure.
+- `notebooks/1_manual_cluster_labeling.ipynb`: Manual validation.
 
 ### Python Package (Programmatic Usage)
 
