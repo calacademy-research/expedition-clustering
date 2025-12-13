@@ -2,7 +2,8 @@ version: '3.8'
 
 services:
   mysql:
-    image: mysql:latest
+    image: mysql:5.7
+    platform: linux/amd64
     container_name: exped_cluster_mysql_container
     environment:
       MYSQL_ROOT_PASSWORD: rootpassword
@@ -12,9 +13,9 @@ services:
     command: >
       --max_allowed_packet=256M
       --net_buffer_length=16K
+      --log-bin-trust-function-creators=ON
     volumes:
       - exped_cluster_mysql_data:/var/lib/mysql
-      - ./data/CASBotanybackup2025-01-23.sql.gz:/docker-entrypoint-initdb.d/CASBotanybackup2025-01-23.sql.gz
     ports:
       - "3306:3306"
     healthcheck:
@@ -28,7 +29,7 @@ services:
     environment:
       PMA_HOST: mysql
       PMA_USER: myuser
-      PMA_PASSWORD: examplepw
+      PMA_PASSWORD: mypassword
     ports:
       - "8081:80"
     depends_on:
