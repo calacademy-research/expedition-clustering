@@ -14,7 +14,7 @@ authors = [
 ]
 dependencies = [
     "pymysql",
-    "numpy",
+    "numpy<2",
     "pandas",
     "scikit-learn",
     "matplotlib",
@@ -38,11 +38,13 @@ include = ["expedition_clustering*"]
 [project.optional-dependencies]
 dev = [
     "ruff>=0.6.0",
+    "pytest>=8.0",
 ]
 
 [tool.uv]
 dev-dependencies = [
     "ruff>=0.6.0",
+    "pytest>=8.0",
 ]
 
 [tool.ruff]

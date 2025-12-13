@@ -37,7 +37,8 @@ class Preprocessor(BaseEstimator, TransformerMixin):
         X = X[(X["latitude1"].between(-90, 90)) & (X["longitude1"].between(-180, 180))]
 
         # Drop rows outside valid startdate range
-        today = datetime.now(tz=UTC)
+        # Use a timezone-naive timestamp to match parsed dates
+        today = pd.Timestamp.utcnow().tz_localize(None)
         min_year = 1800
         X["startdate"] = pd.to_datetime(X["startdate"], errors="coerce")
         X = X[(X["startdate"].dt.year >= min_year) & (X["startdate"] <= today)]
