@@ -4,17 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "expedition-clustering"
-version = "0.1.0"
+version = "0.1.1"
 description = "Spatiotemporal clustering toolkit for the CAS Botany expedition project."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
-    { name = "California Academy of Sciences", email = "collections@calacademy.org" }
+    { name = "Dan Gause", email = "dgause@calacademy.org" }
 ]
 dependencies = [
     "pymysql",
-    "numpy",
+    "numpy<2",
     "pandas",
     "scikit-learn",
     "matplotlib",
@@ -35,14 +35,11 @@ expedition-cluster = "expedition_clustering.cli:main"
 where = ["."]
 include = ["expedition_clustering*"]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "ruff>=0.6.0",
-]
-
-[tool.uv]
-dev-dependencies = [
-    "ruff>=0.6.0",
+    "pytest>=8.0",
+    "pre-commit>=3.7",
 ]
 
 [tool.ruff]
@@ -81,7 +78,8 @@ ignore = [
     "TD002",
     "TD003",
     "FIX002",
-    "TC003",
+    "TCH003",
+    "ISC001",
     "EM101",
     "EM102",
     "N803",
@@ -93,7 +91,6 @@ ignore = [
     "FBT002",
     "D417",
     "PD011",
-    "RUF059",
     "G004",
     "S608",
     "TRY400",
@@ -102,3 +99,4 @@ ignore = [
     "T201",
     "D203"
 ]
+per-file-ignores = { "tests/*" = ["S101", "S105", "S106", "PLR2004"] }

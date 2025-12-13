@@ -1,5 +1,4 @@
 import logging
-from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
@@ -22,7 +21,9 @@ class Preprocessor(BaseEstimator, TransformerMixin):
         required_columns = ["collectingeventid", "latitude1", "longitude1", "startdate"]
         missing = [col for col in required_columns if col not in X.columns]
         if missing:
-            raise ValueError(f"Input dataframe is missing required columns: {missing}. Did the preprocessing step drop all rows?")
+            raise ValueError(
+                f"Input dataframe is missing required columns: {missing}. Did the preprocessing step drop all rows?"
+            )
 
         # Make a copy to avoid modifying the original
         X = X.copy()
@@ -37,12 +38,14 @@ class Preprocessor(BaseEstimator, TransformerMixin):
         X = X[(X["latitude1"].between(-90, 90)) & (X["longitude1"].between(-180, 180))]
 
         # Drop rows outside valid startdate range
-        today = datetime.now(tz=UTC)
+        # Use a timezone-naive timestamp to match parsed dates
+        today = pd.Timestamp.utcnow().tz_localize(None)
         min_year = 1800
         X["startdate"] = pd.to_datetime(X["startdate"], errors="coerce")
         X = X[(X["startdate"].dt.year >= min_year) & (X["startdate"] <= today)]
 
         return X.reset_index(drop=True)
+
 
 # Step 2: Custom Transformer for Spatial DBSCAN Clustering
 class SpatialDBSCAN(BaseEstimator, TransformerMixin):
@@ -70,6 +73,7 @@ class SpatialDBSCAN(BaseEstimator, TransformerMixin):
 
         X["spatial_cluster_id"] = labels
         return X
+
 
 # Step 3: Custom Transformer for Temporal DBSCAN Clustering
 class TemporalDBSCAN(BaseEstimator, TransformerMixin):
@@ -100,6 +104,7 @@ class TemporalDBSCAN(BaseEstimator, TransformerMixin):
             X.loc[mask, "temporal_cluster_id"] = temporal_labels
 
         return X
+
 
 # Step 4: Custom Transformer to Combine Clusters
 class CombineClusters(BaseEstimator, TransformerMixin):
@@ -179,16 +184,12 @@ class ValidateSpatiotemporalConnectivity(BaseEstimator, TransformerMixin):
         if spatial_bad or temporal_bad:
             parts = []
             if spatial_bad:
-                sample = ", ".join(
-                    f"id={cid} comps={comps} size={n}" for cid, comps, n in spatial_bad[:10]
-                )
+                sample = ", ".join(f"id={cid} comps={comps} size={n}" for cid, comps, n in spatial_bad[:10])
                 parts.append(
                     f"{len(spatial_bad)} clusters spatially disconnected at e_dist={self.e_dist}km (examples: {sample})"
                 )
             if temporal_bad:
-                sample = ", ".join(
-                    f"id={cid} comps={comps} size={n}" for cid, comps, n in temporal_bad[:10]
-                )
+                sample = ", ".join(f"id={cid} comps={comps} size={n}" for cid, comps, n in temporal_bad[:10])
                 parts.append(
                     f"{len(temporal_bad)} clusters temporally disconnected at e_days={self.e_days} (examples: {sample})"
                 )
@@ -453,6 +454,7 @@ class IterativeSpatiotemporalClustering(BaseEstimator, TransformerMixin):
                 temporal_bad.append(stc_id)
         return spatial_bad, temporal_bad
 
+
 # Custom scorer for penalized ARI
 # NOTE: This scoring metric isn't really working! Area to work on...
 def partial_ari_with_penalty(true_labels, predicted_labels):
@@ -490,8 +492,10 @@ def partial_ari_with_penalty(true_labels, predicted_labels):
     penalized_score = ari_score - penalty
     return max(0.0, penalized_score)  # Ensure the score is not negative
 
+
 # Create a scorer object for GridSearchCV or cross-validation
 penalized_ari_scorer = make_scorer(partial_ari_with_penalty, greater_is_better=True)
+
 
 # Create the pipeline
 def create_pipeline(e_dist, e_days):
@@ -503,6 +507,7 @@ def create_pipeline(e_dist, e_days):
             ("validate_connectivity", ValidateSpatiotemporalConnectivity(e_dist=e_dist, e_days=e_days)),
         ]
     )
+
 
 # Custom scorer for GridSearchCV
 # NOTE: Shouldn't be used until scorer is improved
@@ -523,6 +528,7 @@ def cluster_pipeline_scorer(estimator, X, y):
     # Compute the penalized Adjusted Rand Index
     return partial_ari_with_penalty(y_aligned, predicted_labels)
 
+
 # Perform K-Fold Analysis
 # NOTE: Shouldn't be used until scorer is improved
 def kfold_analysis(df, e_dist_values, e_days_values):
@@ -530,10 +536,7 @@ def kfold_analysis(df, e_dist_values, e_days_values):
     X = labeled_df.drop(columns=["cluster"])
     y = labeled_df["cluster"]
 
-    param_grid = {
-        "spatial_dbscan__e_dist": e_dist_values,
-        "temporal_dbscan__e_days": e_days_values
-    }
+    param_grid = {"spatial_dbscan__e_dist": e_dist_values, "temporal_dbscan__e_days": e_days_values}
 
     pipeline = create_pipeline(e_dist=0.01, e_days=30)
 
@@ -542,7 +545,7 @@ def kfold_analysis(df, e_dist_values, e_days_values):
         param_grid,
         scoring=cluster_pipeline_scorer,  # Use the updated scorer
         cv=KFold(n_splits=5, shuffle=True, random_state=42),
-        refit=True
+        refit=True,
     )
 
     grid_search.fit(X, y)
@@ -623,8 +626,6 @@ def custom_cv_search(processed_df, pipeline, param_grid, n_clusters=10):
 
     return best_params, best_score, scores
 
+
 # Example Usage
-param_grid = {
-    "spatial_dbscan__e_dist": [.1, 1, 5, 10, 15, 20],
-    "temporal_dbscan__e_days": [3, 5, 7, 9, 10]
-}
+param_grid = {"spatial_dbscan__e_dist": [0.1, 1, 5, 10, 15, 20], "temporal_dbscan__e_days": [3, 5, 7, 9, 10]}

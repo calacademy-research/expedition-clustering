@@ -118,6 +118,7 @@ expedition-clustering/
 ## Development
 - Lint/format: `uv run ruff check` and `uv run ruff format --check` (or `ruff format` to apply fixes).
 - Scripts and notebooks: run with `uv run python ...` to ensure the environment matches the declared dependencies.
+- Pre-commit hooks: install once with `pre-commit install`, then commits will run lint/format checks automatically.
 
 ## License
 MIT License. See `LICENSE` for details.
