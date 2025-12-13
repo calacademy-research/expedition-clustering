@@ -1,0 +1,104 @@
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "expedition-clustering"
+version = "0.1.0"
+description = "Spatiotemporal clustering toolkit for the CAS Botany expedition project."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "California Academy of Sciences", email = "collections@calacademy.org" }
+]
+dependencies = [
+    "pymysql",
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "matplotlib",
+    "shapely",
+    "geopandas",
+    "alphashape",
+    "geodatasets",
+    "cryptography",
+    "Levenshtein",
+    "cartopy",
+    "ipywidgets",
+]
+
+[project.scripts]
+expedition-cluster = "expedition_clustering.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["expedition_clustering*"]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6.0",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "ruff>=0.6.0",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["notebooks/*.ipynb"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "ANN",
+    "COM",
+    "C90",
+    "DJ",
+    "EXE",
+    "T10",
+    "TID",
+    "D100",
+    "D101",
+    "D102",
+    "D103",
+    "D104",
+    "D105",
+    "D106",
+    "D107",
+    "D200",
+    "D205",
+    "D212",
+    "D400",
+    "D401",
+    "D415",
+    "E402",
+    "E501",
+    "TRY003",
+    "TRY300",
+    "TD002",
+    "TD003",
+    "FIX002",
+    "TC003",
+    "EM101",
+    "EM102",
+    "N803",
+    "N806",
+    "PLR0913",
+    "PLR0912",
+    "PLR0915",
+    "FBT001",
+    "FBT002",
+    "D417",
+    "PD011",
+    "RUF059",
+    "G004",
+    "S608",
+    "TRY400",
+    "ARG001",
+    "ARG002",
+    "T201",
+    "D203"
+]

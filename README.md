@@ -2,221 +2,125 @@
 
 ## Table of Contents
 - [Overview](#overview)
-- [Project Background](#project-background)
-- [Features](#features)
-- [Installation](#installation)
+- [Capabilities](#capabilities)
+- [Requirements](#requirements)
+- [Setup](#setup)
 - [Usage](#usage)
+- [Data Workflow](#data-workflow)
 - [Project Structure](#project-structure)
-- [Contributing](#contributing)
+- [Development](#development)
 - [License](#license)
 - [Acknowledgments](#acknowledgments)
 
 ---
 
-## Overview  
-The **Expedition Clustering** project aims to analyze and organize botanical specimen collection data by identifying and grouping individual specimens into their respective expeditions. While our dataset contains extensive information on over a million specimens, their association with specific collection expeditions is often unclear. Understanding these connections will improve data organization, enable better summarization, and support the development of interactive, narrative-based tools for both scientists and educators.
+## Overview
+Expedition Clustering groups California Academy of Sciences botany specimens into inferred expeditions using spatiotemporal DBSCAN. The package pairs a reproducible pipeline with database helpers, plotting utilities, and command-line tooling so museum staff and collaborators can cluster full database exports or smaller slices for validation.
 
-By clustering specimens based on collection patterns, locations, collector information, and dates, this project will provide deeper insights into historical and modern botanical expeditions. These insights will facilitate research, highlight under-sampled regions, and help build engaging visualizations for storytelling and scientific analysis.
+## Capabilities
+- Spatiotemporal DBSCAN pipeline with safeguards to keep clusters spatially and temporally connected after per-location time slicing.
+- Ready-to-run sklearn pipeline factory: `create_pipeline(e_dist, e_days)` yields a transformer that returns a DataFrame with `spatiotemporal_cluster_id`.
+- Database ingestion helpers: `DatabaseConfig`, `load_core_tables`, and `build_clean_dataframe` replicate the cleaning steps used in the exploratory notebooks.
+- Command-line entry point `expedition-cluster` for end-to-end clustering from a MySQL export.
+- Plotting utilities for quick QA (`plot_geographical_positions`, `plot_geographical_heatmap`, `plot_time_histogram`) and notebooks for deeper inspection.
 
----
+## Requirements
+- Python 3.10+
+- Docker with Docker Compose (for the bundled MySQL configuration)
+- Access to the CAS botany MySQL dump used in the notebooks (not distributed with this repository)
 
-## Project Background  
-Botanical collections serve as invaluable records of biodiversity, helping scientists track species distributions, ecological changes, and conservation needs. However, these collections are often cataloged at the specimen level, making it difficult to reconstruct the expeditions that gathered them. Expeditions—organized efforts by researchers, institutions, and explorers—play a crucial role in shaping our understanding of plant biodiversity. By identifying expedition clusters, we can:
-
-- Reconstruct historical collection efforts and their geographic scope.  
-- Detect biases in collection efforts and identify under-sampled regions.  
-- Enhance database organization by grouping specimens within meaningful contexts.  
-- Enable interactive tools that allow scientists, educators, and the public to explore past expeditions through maps and narratives.  
-
-This project leverages data science, natural language processing, and clustering techniques to infer expedition groupings from collection metadata, contributing to both research and public engagement with botanical history.
-
----
-
-## Features  
-✅ **Spatiotemporal Clustering** – Groups specimens into expeditions based on collection locations and dates.  
-✅ **Machine Learning Integration** – Applies clustering algorithms and NLP techniques for automated classification.  
-✅ **Data Visualization** – Generates interactive maps and plots for understanding collection trends.  
-✅ **Reproducible Workflow** – Supports automation and scalability through Python scripts and Jupyter notebooks.  
-✅ **Open Source** – Designed to be extensible for research and educational purposes.  
-
----
-
-## Installation  
-
-### Prerequisites  
-Ensure you have the following installed:  
-- Python 3.8+  
-- Docker (for containerized execution)  
-
-### Setup  
-Clone the repository:
+## Setup
+1) Clone the repository
 ```bash
-git clone https://github.com/yourusername/expedition-clustering.git
+git clone https://github.com/calacademy-research/expedition-clustering.git
 cd expedition-clustering
 ```
 
-Create a virtual environment and install dependencies:
-```python -m venv venv
-source venv/bin/activate  # On Windows, use venv\Scripts\activate
+2) Install dependencies (pick one)
+```bash
+# Recommended
+uv sync --dev
+
+# Or with pip
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+pip install -e .
 ```
 
-(Optional) Start the database container using Docker:
-
+3) Start MySQL (matches docker-compose defaults: host=localhost, user=myuser, password=mypassword, db=exped_cluster_db)
 ```bash
 docker-compose up -d
-docker exec -i exped_cluster_mysql_container mysql -u root -prootpassword exped_cluster_db < ./data/{unzipped botany backup filename}
+# Load your dump if needed:
+# docker exec -i exped_cluster_mysql_container mysql -u root -prootpassword exped_cluster_db < path/to/backup.sql
 ```
 
+## Usage
 
-## Usage  
- 
-### Running the Clustering Pipeline  
-Currently all clustering functions must be called from within the Jupyter Notebooks. Programmatic pipeline scripts are under development.
- 
-### Running Jupyter Notebooks  
-The notebooks are meant to be run in order of ascending prepending integer. Running them in sequence is crucial as they depend on artifacts saved between notebooks.
- 
- 
----  
- 
-## Project Structure  
- 
-The repository is organized as follows:  
- 
-```plaintext  
-EXPEDITION-CLUSTERING/  
-│── data/                      # Contains raw and processed dataset files  
-│   ├── CASBotanybackup2025-01-23.sql        # SQL database backup  
-│   ├── CASBotanybackup2025-01-23.sql.gz  ‼️  # Compressed SQL backup  
-│   ├── clean_df.csv                         # Cleaned dataset after preprocessing  
-│   ├── cluster_summary_stats.csv            # Summary statistics of clustered data  
-│   ├── full_df.csv                          # Full dataset before processing  
-│   ├── full_processed_df.csv                # Fully processed dataset after clustering  
-│   ├── labeled_clean_df.csv                 # Clean dataset with assigned cluster labels  
-│   ├── processed_df.csv                      # Intermediate processed dataset  
-│  
-│── docs/                      # Documentation and notes  
-│   ├── exped_clust_notes.pages  # Notes related to expedition clustering  
-│  
-│── notebooks/                  # Jupyter notebooks for analysis and clustering  
-│   ├── 0_table_eda.ipynb                        # Exploratory data analysis of specimen collections  
-│   ├── 1_manual_cluster_labeling.ipynb         # Manual cluster labeling and validation  
-│   ├── 2_spatiotemporal_clustering_algorithm.ipynb  # Primary clustering algorithm based on space-time data  
-│   ├── 3_secondary_clustering.ipynb            # Secondary clustering refinements and validation  
-│   ├── 4_determination.ipynb                    # Final decision-making on clusters  
-│  
-│── .gitignore                # Specifies files and folders to ignore in version control  
-│── cluster_pipeline.py       # Python script implementing the clustering pipeline  
-│── docker-compose.yml        # Configuration for running services in Docker  
-│── plotting.py               # Script for visualizing clustering results  
-│── README.md                 # Project documentation  
-│── requirements.txt          # Dependencies required for running the project  
-```  
- 
----  
- 
-## Contributing  
-We welcome contributions! To contribute:  
-1. Fork the repository.  
-2. Create a new branch (`git checkout -b feature-branch`).  
-3. Commit your changes (`git commit -m "Add feature"`) and push (`git push origin feature-branch`).  
-4. Open a Pull Request.  
- 
----  
- 
-## License  
-This project is licensed under the **MIT License** – see the [LICENSE](LICENSE) file for details.  
- 
----  
- 
-## Acknowledgments  
-🔬 Special thanks to **CalAcademy's botany collections team** for providing access to over a million collection records.  
-🌍 Thanks to the **open-source community** for developing powerful data science tools that make this research possible.  
-📚 Inspired by previous works in **botanical data clustering and machine learning applications in biodiversity research**.  
- 
----  
- 
-Happy exploring! 🚀🌿  
+### Command line
+Run the full pipeline directly against the database:
+```bash
+uv run expedition-cluster \
+  --e-dist 10 \
+  --e-days 7 \
+  --limit 50000 \
+  --output data/clustered_expeditions.csv
+```
+Flags of note: `--include-centroids` fills missing locality coordinates with geography centroids; `--log-level DEBUG` surfaces validation details.
 
+### Python API
+```python
+from expedition_clustering import (
+    DatabaseConfig,
+    build_clean_dataframe,
+    create_pipeline,
+    load_core_tables,
+)
 
+config = DatabaseConfig()  # defaults match docker-compose.yml
+tables = load_core_tables(
+    config,
+    limit=5000,           # cap rows per table for a quick dry run
+    related_only=True,
+    primary_table="collectionobject",
+)
 
+clean_df = build_clean_dataframe(tables)
+pipeline = create_pipeline(e_dist=10, e_days=7)
+clustered = pipeline.fit_transform(clean_df)
+clustered.to_csv("data/clustered_expeditions.csv", index=False)
+print("Expeditions:", clustered["spatiotemporal_cluster_id"].nunique())
+```
+If the clean DataFrame is empty, raise the `limit`, switch `primary_table="collectingevent"`, or set `related_only=False`/`filter_related=False` to include more records.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# Expedition Clustering
-
-## Project Overview  
-The **Expedition Clustering** project aims to analyze and organize botanical specimen collection data by identifying and grouping individual specimens into their respective expeditions. While our dataset contains extensive information on over a million specimens, their association with specific collection expeditions is often unclear. Understanding these connections will improve data organization, enable better summarization, and support the development of interactive, narrative-based tools for both scientists and educators.
-
-By clustering specimens based on collection patterns, locations, collector information, and dates, this project will provide deeper insights into historical and modern botanical expeditions. These insights will facilitate research, highlight under-sampled regions, and help build engaging visualizations for storytelling and scientific analysis.
-
----
-
-## Project Background  
-Botanical collections serve as invaluable records of biodiversity, helping scientists track species distributions, ecological changes, and conservation needs. However, these collections are often cataloged at the specimen level, making it difficult to reconstruct the expeditions that gathered them. Expeditions—organized efforts by researchers, institutions, and explorers—play a crucial role in shaping our understanding of plant biodiversity. By identifying expedition clusters, we can:
-
-- Reconstruct historical collection efforts and their geographic scope.  
-- Detect biases in collection efforts and identify under-sampled regions.  
-- Enhance database organization by grouping specimens within meaningful contexts.  
-- Enable interactive tools that allow scientists, educators, and the public to explore past expeditions through maps and narratives.  
-
-This project leverages data science, natural language processing, and clustering techniques to infer expedition groupings 
-from collection metadata, contributing to both research and public engagement with botanical history.
-
----
+## Data Workflow
+1. Pull source tables from MySQL with `load_core_tables` (optionally limited for smoke tests).
+2. Merge and clean with `build_clean_dataframe`, which normalizes column names, converts dates, and prefers precise locality coordinates over centroids.
+3. Build and run the clustering pipeline via `create_pipeline(e_dist, e_days)`. The output includes spatial, temporal, and combined cluster IDs plus validation to guard against disconnected clusters.
+4. Use plotting helpers or the notebooks for visual QA of spatial and temporal patterns.
 
 ## Project Structure
-
-This repository is established as a data science exploratory effort. As such, it consists of a simple flat package layout with **data/**, **docs/**, and **notebooks/** subdirectories, and a few python modules containing pipeline and plotting functions. 
-
-The repository is organized as follows:
-
-```plaintext
-EXPEDITION-CLUSTERING/
-│── data/                      # Contains raw and processed dataset files. The contents of this directory are hidden from git
-│   ├── **CASBotanybackup2025-01-23.sql.gz**     #  ‼️ Compressed SQL backup: upload your own version locally ‼️
-│
-│── docs/                      # Documentation and notes
-│   ├── exped_clust_notes.pages  # Notes related to expedition clustering
-│
-│── notebooks/                  # Jupyter notebooks for analysis and clustering
-│   ├── 0_table_eda.ipynb                        # Exploratory data analysis of specimen collections
-│   ├── 1_manual_cluster_labeling.ipynb         # Manual cluster labeling and validation
-│   ├── 2_spatiotemporal_clustering_algorithm.ipynb  # Primary clustering algorithm based on space-time data
-│   ├── 3_secondary_clustering.ipynb            # Secondary clustering refinements and validation
-│   ├── 4_determination.ipynb                    # Final decision-making on clusters
-│
-│── .gitignore                # Specifies files and folders to ignore in version control
-│── cluster_pipeline.py       # Python script implementing the clustering pipeline
-│── docker-compose.yml        # Configuration for running services in Docker
-│── plotting.py               # Script for visualizing clustering results
-│── README.md                 # Project documentation
-│── requirements.txt          # Dependencies required for running the project
-
 ```
----
+expedition-clustering/
+├── docker-compose.yml             # MySQL configuration used in notebooks and CLI
+├── expedition_clustering/
+│   ├── cli.py                     # expedition-cluster entry point
+│   ├── data.py                    # Database connectors and table loaders
+│   ├── pipeline.py                # Spatiotemporal DBSCAN pipeline components
+│   ├── plotting.py                # Mapping and histogram utilities
+│   └── preprocessing.py           # Merge/clean helpers for core tables
+├── notebooks/                     # EDA, manual labeling, and algorithm walkthroughs
+├── pyproject.toml                 # Packaging and tooling configuration
+├── requirements.txt
+└── data/                          # Local datasets and outputs (git-ignored)
+```
 
-## Requirements
+## Development
+- Lint/format: `uv run ruff check` and `uv run ruff format --check` (or `ruff format` to apply fixes).
+- Scripts and notebooks: run with `uv run python ...` to ensure the environment matches the declared dependencies.
 
-The project dependencies are listed in the [`requirements.txt`](command:_github.copilot.openRelativePath?%5B%7B%22scheme%22%3A%22file%22%2C%22authority%22%3A%22%22%2C%22path%22%3A%22%2FUsers%2Fdangause%2FDesktop%2Fcalacademy%2Fexpedition-clustering%2Frequirements.txt%22%2C%22query%22%3A%22%22%2C%22fragment%22%3A%22%22%7D%5D "/Users/dangause/Desktop/calacademy/expedition-clustering/requirements.txt") file. To install the required packages, run:
+## License
+MIT License. See `LICENSE` for details.
 
-```sh
-pip install -r requirements.txt
+## Acknowledgments
+Thanks to the California Academy of Sciences botany collections team for access to the source data and domain guidance, and to the open-source community whose tools underpin this work.
