@@ -30,7 +30,7 @@ class DatabaseConfig:
 
     host: str = "localhost"
     user: str = "myuser"
-    password: str = "mypassword"
+    password: str = "examplepw"
     database: str = "exped_cluster_db"
     port: int = 3306
     charset: str = "utf8mb4"
