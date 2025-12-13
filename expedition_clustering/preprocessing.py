@@ -10,7 +10,7 @@ The functions below mirror the `0_table_eda.ipynb` workflow that:
 from __future__ import annotations
 
 import logging
-from typing import Mapping, Optional, Sequence
+from collections.abc import Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -58,7 +58,7 @@ def merge_core_tables(
     geography_df: pd.DataFrame,
     *,
     filter_related: bool = True,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger | None = None,
 ) -> pd.DataFrame:
     """
     Reproduce the chained merge logic from `0_table_eda.ipynb`.
@@ -66,7 +66,6 @@ def merge_core_tables(
     This keeps only the columns that proved useful in downstream notebooks,
     making the resulting DataFrame lean enough for re-use in scripts/tests.
     """
-
     # Select only the columns we need (that exist in the source dataframes)
     event_cols = [c for c in COLLECTING_EVENT_COLUMNS if c in collecting_event_df.columns]
     object_cols = [c for c in COLLECTION_OBJECT_COLUMNS if c in collection_object_df.columns]
@@ -142,7 +141,7 @@ def clean_for_clustering(
     merged_df: pd.DataFrame,
     drop_missing_spatial: bool = True,
     drop_missing_start_date: bool = True,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger | None = None,
 ) -> pd.DataFrame:
     """
     Apply the spatial/temporal filters that produced `clean_df` in EDA.
@@ -155,8 +154,8 @@ def clean_for_clustering(
         If True (default), drop rows missing both `Latitude1` and `CentroidLat`.
     drop_missing_start_date:
         If True (default), drop rows missing `StartDate`.
-    """
 
+    """
     df = merged_df.copy()
 
     # Normalize column names to lowercase for consistency
@@ -187,20 +186,20 @@ def build_clean_dataframe(
     drop_missing_spatial: bool = True,
     drop_missing_start_date: bool = True,
     filter_related: bool = True,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger | None = None,
 ) -> pd.DataFrame:
     """
     Convenience wrapper that expects a dictionary returned by `load_core_tables`.
 
-    Example
+    Example:
     -------
     ```python
     config = DatabaseConfig()
     tables = load_core_tables(config)
     clean_df = build_clean_dataframe(tables)
     ```
-    """
 
+    """
     required_keys = {
         "collectingevent",
         "collectionobject",

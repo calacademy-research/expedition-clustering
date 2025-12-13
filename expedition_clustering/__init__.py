@@ -61,38 +61,32 @@ from .preprocessing import (
 )
 
 __all__ = [
-    # Core API
+    "CombineClusters",
+    "DatabaseConfig",
+    "IterativeSpatiotemporalClustering",
+    "Preprocessor",
+    "SpatialDBSCAN",
+    "SpatialReconnectWithinSpatiotemporal",
+    "SpatialReconnectWithinTemporal",
+    "TemporalDBSCAN",
+    "TemporalDBSCANRecompute",
+    "TemporalReconnectWithinSpatiotemporal",
+    "ValidateSpatiotemporalConnectivity",
+    "build_clean_dataframe",
+    "clean_for_clustering",
+    "cluster_pipeline_scorer",
     "create_pipeline",
-    # Visualization
+    "custom_cv_search",
+    "fetch_table",
+    "kfold_analysis",
+    "load_core_tables",
+    "merge_core_tables",
+    "partial_ari_with_penalty",
+    "penalized_ari_scorer",
     "plot_geographical_heatmap",
     "plot_geographical_heatmap_by_day",
     "plot_geographical_positions",
     "plot_time_histogram",
-    # Database utilities
-    "DatabaseConfig",
-    "fetch_table",
-    "load_core_tables",
-    # Preprocessing
-    "build_clean_dataframe",
-    "clean_for_clustering",
-    "merge_core_tables",
-    # Pipeline components
-    "CombineClusters",
-    "Preprocessor",
-    "SpatialDBSCAN",
-    "TemporalDBSCANRecompute",
-    "TemporalDBSCAN",
-    "SpatialReconnectWithinTemporal",
-    "SpatialReconnectWithinSpatiotemporal",
-    "TemporalReconnectWithinSpatiotemporal",
-    "IterativeSpatiotemporalClustering",
-    "ValidateSpatiotemporalConnectivity",
-    # Evaluation (experimental)
-    "cluster_pipeline_scorer",
-    "custom_cv_search",
-    "kfold_analysis",
-    "partial_ari_with_penalty",
-    "penalized_ari_scorer",
 ]
 
 __version__ = "0.1.0"

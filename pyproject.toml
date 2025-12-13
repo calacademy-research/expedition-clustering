@@ -46,14 +46,59 @@ dev-dependencies = [
 ]
 
 [tool.ruff]
-target-version = "py310"
-line-length = 150
+line-length = 120
+target-version = "py312"
+extend-exclude = ["notebooks/*.ipynb"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]
-ignore = []
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-line-ending = "auto"
+select = ["ALL"]
+ignore = [
+    "ANN",
+    "COM",
+    "C90",
+    "DJ",
+    "EXE",
+    "T10",
+    "TID",
+    "D100",
+    "D101",
+    "D102",
+    "D103",
+    "D104",
+    "D105",
+    "D106",
+    "D107",
+    "D200",
+    "D205",
+    "D212",
+    "D400",
+    "D401",
+    "D415",
+    "E402",
+    "E501",
+    "TRY003",
+    "TRY300",
+    "TD002",
+    "TD003",
+    "FIX002",
+    "TC003",
+    "EM101",
+    "EM102",
+    "N803",
+    "N806",
+    "PLR0913",
+    "PLR0912",
+    "PLR0915",
+    "FBT001",
+    "FBT002",
+    "D417",
+    "PD011",
+    "RUF059",
+    "G004",
+    "S608",
+    "TRY400",
+    "ARG001",
+    "ARG002",
+    "T201",
+    "D203"
+]

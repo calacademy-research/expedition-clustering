@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Dict, Iterable, Iterator, Mapping, Optional, Sequence
 
 import pandas as pd
 import pymysql
@@ -30,7 +30,7 @@ class DatabaseConfig:
 
     host: str = "localhost"
     user: str = "myuser"
-    password: str = "mypassword"
+    password: str = "mypassword"  # noqa: S105
     database: str = "exped_cluster_db"
     port: int = 3306
     charset: str = "utf8mb4"
@@ -62,8 +62,8 @@ def fetch_table(
     config: DatabaseConfig,
     table_name: str,
     columns: Iterable[str] | str = "*",
-    where: Optional[str] = None,
-    limit: Optional[int] = None,
+    where: str | None = None,
+    limit: int | None = None,
 ) -> pd.DataFrame:
     """
     Fetch a table (or subset of columns) into a pandas DataFrame.
@@ -80,12 +80,9 @@ def fetch_table(
         Optional SQL WHERE clause (without the `WHERE` keyword).
     limit:
         Optional LIMIT clause to restrict the number of returned rows.
-    """
 
-    if isinstance(columns, str):
-        column_expr = columns
-    else:
-        column_expr = ", ".join(columns)
+    """
+    column_expr = columns if isinstance(columns, str) else ", ".join(columns)
 
     query = f"SELECT {column_expr} FROM {table_name}"
     if where:
@@ -108,7 +105,6 @@ def fetch_table_by_ids(
     """
     Fetch rows whose primary/foreign keys are contained within ``ids``.
     """
-
     clean_ids = [i for i in ids if pd.notna(i)]
     if not clean_ids:
         return pd.DataFrame()
@@ -148,11 +144,11 @@ def load_core_tables(
     tables: Iterable[str] = DEFAULT_TABLES,
     limit: int | None = None,
     table_limits: Mapping[str, int] | None = None,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger | None = None,
     related_only: bool = False,
     related_chunk_size: int = 2000,
     primary_table: str = "collectionobject",
-) -> Dict[str, pd.DataFrame]:
+) -> dict[str, pd.DataFrame]:
     """
     Load the tables explored in the notebooks into memory.
 
@@ -166,13 +162,13 @@ def load_core_tables(
     table_limits:
         Optional per-table overrides. When provided, this dictionary takes
         precedence over the global ``limit`` for matching table names.
-    """
 
+    """
     table_list = list(tables)
-    data: Dict[str, pd.DataFrame] = {}
+    data: dict[str, pd.DataFrame] = {}
 
     def fetch_with_logging(
-        table_name: str, table_limit: Optional[int], where: Optional[str] = None
+        table_name: str, table_limit: int | None, where: str | None = None
     ) -> pd.DataFrame:
         if logger:
             msg = f"Fetching {table_name}"

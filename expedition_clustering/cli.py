@@ -22,15 +22,14 @@ import pymysql
 from expedition_clustering import create_pipeline
 
 
-def process_batch(df_batch, pipeline, logger, batch_num=None):
+def process_batch(df_batch, pipeline, logger):
     """Process a single batch of specimens through the clustering pipeline."""
-    logger.info(f"Processing {len(df_batch)} specimens...")
+    logger.info("Processing %s specimens...", len(df_batch))
 
     try:
-        clustered = pipeline.fit_transform(df_batch)
-        return clustered
+        return pipeline.fit_transform(df_batch)
     except MemoryError:
-        logger.error("Out of memory processing dataset. Consider reducing --limit.")
+        logger.exception("Out of memory processing dataset. Consider reducing --limit.")
         raise
 
 
@@ -125,7 +124,7 @@ def main():
           AND l.Latitude1 IS NOT NULL
           AND l.Longitude1 IS NOT NULL"""
 
-        query = f"""
+        query = f"""  # noqa: S608
         SELECT
             ce.CollectingEventID as collectingeventid,
             ce.StartDate as startdate,
@@ -174,19 +173,19 @@ def main():
         df.columns = df.columns.str.lower()
 
         # Convert dates
-        df['startdate'] = pd.to_datetime(df['startdate'], errors='coerce')
-        df['enddate'] = pd.to_datetime(df['enddate'], errors='coerce')
+        df["startdate"] = pd.to_datetime(df["startdate"], errors="coerce")
+        df["enddate"] = pd.to_datetime(df["enddate"], errors="coerce")
 
         # Fill in missing precise coordinates with geography centroids (only if --include-centroids)
         if args.include_centroids:
-            df['latitude1'] = df['latitude1'].fillna(df['centroidlat'])
-            df['longitude1'] = df['longitude1'].fillna(df['centroidlon'])
+            df["latitude1"] = df["latitude1"].fillna(df["centroidlat"])
+            df["longitude1"] = df["longitude1"].fillna(df["centroidlon"])
             logger.info("Filled missing coordinates with %d geography centroids",
-                       df['latitude1'].notna().sum() - (df['latitude1'].notna() & df['centroidlat'].isna()).sum())
+                       df["latitude1"].notna().sum() - (df["latitude1"].notna() & df["centroidlat"].isna()).sum())
 
         # Drop rows without coordinates or dates
         initial_count = len(df)
-        df = df[df['latitude1'].notna() & df['longitude1'].notna() & df['startdate'].notna()]
+        df = df[df["latitude1"].notna() & df["longitude1"].notna() & df["startdate"].notna()]
         dropped = initial_count - len(df)
 
         if dropped > 0:
@@ -200,16 +199,19 @@ def main():
         logger.info("Processing %d specimens...", total_specimens)
 
         logger.info("Processing entire dataset in a single pass...")
-        logger.info("Running spatiotemporal clustering (e_dist=%skm, e_days=%s days)...",
-                    args.e_dist, args.e_days)
+        logger.info(
+            "Running spatiotemporal clustering (e_dist=%skm, e_days=%s days)...",
+            args.e_dist,
+            args.e_days,
+        )
 
         pipeline = create_pipeline(e_dist=args.e_dist, e_days=args.e_days)
         clustered = process_batch(df, pipeline, logger)
 
         # Report results
-        num_clusters = clustered['spatiotemporal_cluster_id'].nunique()
+        num_clusters = clustered["spatiotemporal_cluster_id"].nunique()
         avg_size = len(clustered) / num_clusters
-        cluster_sizes = clustered.groupby('spatiotemporal_cluster_id').size()
+        cluster_sizes = clustered.groupby("spatiotemporal_cluster_id").size()
 
         logger.info("=" * 60)
         logger.info("Clustering Results:")
@@ -230,26 +232,31 @@ def main():
 
         # Show sample
         logger.info("\nSample of results (first 10 rows):")
-        sample_cols = ['collectingeventid', 'collectionobjectid', 'latitude1', 'longitude1',
-                      'startdate', 'spatiotemporal_cluster_id']
-        print(clustered[sample_cols].head(10).to_string(index=False))
+        sample_cols = [
+            "collectingeventid",
+            "collectionobjectid",
+            "latitude1",
+            "longitude1",
+            "startdate",
+            "spatiotemporal_cluster_id",
+        ]
+        logger.info("\n%s", clustered[sample_cols].head(10).to_string(index=False))
 
         logger.info("\n✓ Clustering completed successfully!")
 
-    except pymysql.Error as e:
-        logger.error("Database error: %s", e)
-        logger.error("Make sure the database is running: docker-compose up -d")
+    except pymysql.Error:
+        logger.exception("Database error. Make sure the database is running: docker-compose up -d")
         sys.exit(1)
 
     except MemoryError:
-        logger.error("Out of memory! Try one of these solutions:")
+        logger.exception("Out of memory! Try one of these solutions:")
         logger.error("  1. Use --limit to process fewer specimens")
         logger.error("  2. Add geographic/temporal filters to the query")
         logger.error("  3. Use a machine with more RAM")
         sys.exit(1)
 
-    except Exception as e:
-        logger.error("Error: %s", e, exc_info=True)
+    except Exception:
+        logger.exception("Error during clustering run")
         sys.exit(1)
 
 

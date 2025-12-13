@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
@@ -19,7 +19,7 @@ class Preprocessor(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
-        required_columns = ['collectingeventid', 'latitude1', 'longitude1', 'startdate']
+        required_columns = ["collectingeventid", "latitude1", "longitude1", "startdate"]
         missing = [col for col in required_columns if col not in X.columns]
         if missing:
             raise ValueError(f"Input dataframe is missing required columns: {missing}. Did the preprocessing step drop all rows?")
@@ -28,18 +28,19 @@ class Preprocessor(BaseEstimator, TransformerMixin):
         X = X.copy()
 
         # Remove duplicate collectingeventid, keeping the first occurrence
-        X = X.drop_duplicates(subset='collectingeventid', keep='first')
+        X = X.drop_duplicates(subset="collectingeventid", keep="first")
 
         # Drop rows with null latitude1, longitude1, or startdate (should already be handled)
-        X = X.dropna(subset=['latitude1', 'longitude1', 'startdate'])
+        X = X.dropna(subset=["latitude1", "longitude1", "startdate"])
 
         # Drop rows outside valid latitude and longitude ranges
-        X = X[(X['latitude1'].between(-90, 90)) & (X['longitude1'].between(-180, 180))]
+        X = X[(X["latitude1"].between(-90, 90)) & (X["longitude1"].between(-180, 180))]
 
         # Drop rows outside valid startdate range
-        today = datetime.today()
-        X['startdate'] = pd.to_datetime(X['startdate'], errors='coerce')
-        X = X[(X['startdate'].dt.year >= 1800) & (X['startdate'] <= today)]
+        today = datetime.now(tz=UTC)
+        min_year = 1800
+        X["startdate"] = pd.to_datetime(X["startdate"], errors="coerce")
+        X = X[(X["startdate"].dt.year >= min_year) & (X["startdate"] <= today)]
 
         return X.reset_index(drop=True)
 
@@ -56,18 +57,18 @@ class SpatialDBSCAN(BaseEstimator, TransformerMixin):
         # Coerce coordinates to numeric early to avoid string/object dtype surprises
         X["latitude1"] = pd.to_numeric(X["latitude1"], errors="coerce")
         X["longitude1"] = pd.to_numeric(X["longitude1"], errors="coerce")
-        coords = np.radians(X[['latitude1', 'longitude1']].values)
+        coords = np.radians(X[["latitude1", "longitude1"]].values)
         eps_rad = self.e_dist / 6371  # Convert e_dist to radians
 
         db = DBSCAN(
             eps=eps_rad,
             min_samples=1,
-            metric='haversine',
-            algorithm='ball_tree',
+            metric="haversine",
+            algorithm="ball_tree",
         )
         labels = db.fit_predict(coords)
 
-        X['spatial_cluster_id'] = labels
+        X["spatial_cluster_id"] = labels
         return X
 
 # Step 3: Custom Transformer for Temporal DBSCAN Clustering
@@ -115,9 +116,9 @@ class CombineClusters(BaseEstimator, TransformerMixin):
         original_indices = X.index
 
         # Generate unique integer IDs for spatiotemporal clusters
-        cluster_combinations = X[['spatial_cluster_id', 'temporal_cluster_id']].drop_duplicates().reset_index(drop=True)
-        cluster_combinations['spatiotemporal_cluster_id'] = range(len(cluster_combinations))
-        X = X.merge(cluster_combinations, on=['spatial_cluster_id', 'temporal_cluster_id'], how='left')
+        cluster_combinations = X[["spatial_cluster_id", "temporal_cluster_id"]].drop_duplicates().reset_index(drop=True)
+        cluster_combinations["spatiotemporal_cluster_id"] = range(len(cluster_combinations))
+        X = X.merge(cluster_combinations, on=["spatial_cluster_id", "temporal_cluster_id"], how="left")
 
         # Restore original indices
         X.index = original_indices
@@ -214,7 +215,7 @@ class SpatialReconnectWithinTemporal(BaseEstimator, TransformerMixin):
         labels = X["spatial_cluster_id"].to_numpy()
         next_label = int(labels.max()) + 1 if labels.size else 0
 
-        for (sp_id, t_id), sub in X.groupby(["spatial_cluster_id", "temporal_cluster_id"]):
+        for (_sp_id, _t_id), sub in X.groupby(["spatial_cluster_id", "temporal_cluster_id"]):
             if len(sub) <= 1:
                 continue
             coords = np.radians(sub[["latitude1", "longitude1"]].astype(float).to_numpy())
@@ -290,7 +291,7 @@ class SpatialReconnectWithinSpatiotemporal(BaseEstimator, TransformerMixin):
         eps_rad = self.e_dist / 6371
         next_id = int(X["spatiotemporal_cluster_id"].max()) + 1 if len(X) else 0
 
-        for stc_id, sub in X.groupby("spatiotemporal_cluster_id"):
+        for _stc_id, sub in X.groupby("spatiotemporal_cluster_id"):
             if len(sub) <= 1:
                 continue
             coords = np.radians(sub[["latitude1", "longitude1"]].astype(float).to_numpy())
@@ -333,7 +334,7 @@ class TemporalReconnectWithinSpatiotemporal(BaseEstimator, TransformerMixin):
         eps_days = float(self.e_days)
         next_id = int(X["spatiotemporal_cluster_id"].max()) + 1 if len(X) else 0
 
-        for stc_id, sub in X.groupby("spatiotemporal_cluster_id"):
+        for _stc_id, sub in X.groupby("spatiotemporal_cluster_id"):
             if len(sub) <= 1:
                 continue
             times = sub["startdate"].to_numpy(dtype="datetime64[D]").astype(float).reshape(-1, 1)
@@ -462,29 +463,29 @@ def partial_ari_with_penalty(true_labels, predicted_labels):
     # Convert inputs to numpy arrays for easier manipulation
     true_labels = np.array(true_labels)
     predicted_labels = np.array(predicted_labels)
-    
+
     # Mask for valid (non-NaN) labels
     valid_mask = ~np.isnan(true_labels) & ~np.isnan(predicted_labels)
     true_labels_filtered = true_labels[valid_mask]
     predicted_labels_filtered = predicted_labels[valid_mask]
-    
+
     # Compute ARI for the filtered subset
     if len(true_labels_filtered) == 0 or len(predicted_labels_filtered) == 0:
         return 0.0  # Return 0 if no valid labels are available
-    
+
     ari_score = adjusted_rand_score(true_labels_filtered, predicted_labels_filtered)
-    
+
     # Penalize cases where unlabeled rows share cluster IDs with labeled rows
     labeled_mask = ~np.isnan(true_labels)
     unlabeled_mask = np.isnan(true_labels)
     labeled_cluster_ids = set(predicted_labels[labeled_mask])
     unlabeled_cluster_ids = predicted_labels[unlabeled_mask]
     penalty_count = sum(cid in labeled_cluster_ids for cid in unlabeled_cluster_ids)
-    
+
     # Define a penalty factor (adjustable based on sensitivity)
     penalty_factor = 100
     penalty = penalty_factor * penalty_count / len(predicted_labels)
-    
+
     # Return the penalized ARI score
     penalized_score = ari_score - penalty
     return max(0.0, penalized_score)  # Ensure the score is not negative
@@ -494,13 +495,14 @@ penalized_ari_scorer = make_scorer(partial_ari_with_penalty, greater_is_better=T
 
 # Create the pipeline
 def create_pipeline(e_dist, e_days):
-    pipeline = Pipeline([
-        ('preprocessor', Preprocessor()),
-        ('spatial_dbscan', SpatialDBSCAN(e_dist=e_dist)),
-        ('iterative_spatiotemporal', IterativeSpatiotemporalClustering(e_dist=e_dist, e_days=e_days)),
-        ('validate_connectivity', ValidateSpatiotemporalConnectivity(e_dist=e_dist, e_days=e_days)),
-    ])
-    return pipeline
+    return Pipeline(
+        [
+            ("preprocessor", Preprocessor()),
+            ("spatial_dbscan", SpatialDBSCAN(e_dist=e_dist)),
+            ("iterative_spatiotemporal", IterativeSpatiotemporalClustering(e_dist=e_dist, e_days=e_days)),
+            ("validate_connectivity", ValidateSpatiotemporalConnectivity(e_dist=e_dist, e_days=e_days)),
+        ]
+    )
 
 # Custom scorer for GridSearchCV
 # NOTE: Shouldn't be used until scorer is improved
@@ -510,27 +512,27 @@ def cluster_pipeline_scorer(estimator, X, y):
     """
     # Transform the data to get the predicted labels
     transformed = estimator.transform(X)
-    
+
     # Align transformed data with X_test's indices
     transformed = transformed.reindex(X.index)
-    predicted_labels = transformed['spatiotemporal_cluster_id'].values
-    
+    predicted_labels = transformed["spatiotemporal_cluster_id"].values
+
     # Ensure `y` is also aligned with X_test
     y_aligned = y.reindex(X.index).values
-    
+
     # Compute the penalized Adjusted Rand Index
     return partial_ari_with_penalty(y_aligned, predicted_labels)
 
 # Perform K-Fold Analysis
 # NOTE: Shouldn't be used until scorer is improved
 def kfold_analysis(df, e_dist_values, e_days_values):
-    labeled_df = df.dropna(subset=['cluster'])
-    X = labeled_df.drop(columns=['cluster'])
-    y = labeled_df['cluster']
+    labeled_df = df.dropna(subset=["cluster"])
+    X = labeled_df.drop(columns=["cluster"])
+    y = labeled_df["cluster"]
 
     param_grid = {
-        'spatial_dbscan__e_dist': e_dist_values,
-        'temporal_dbscan__e_days': e_days_values
+        "spatial_dbscan__e_dist": e_dist_values,
+        "temporal_dbscan__e_days": e_days_values
     }
 
     pipeline = create_pipeline(e_dist=0.01, e_days=30)
@@ -555,8 +557,9 @@ def custom_cv_search(processed_df, pipeline, param_grid, n_clusters=10):
     """
     Perform cross-validation search to minimize the average percentage difference
     between manual and algorithm-determined cluster sizes.
-    
-    Parameters:
+
+    Parameters
+    ----------
     - processed_df: pd.DataFrame
         DataFrame containing the clustering results and the `cluster` column.
     - pipeline: sklearn.pipeline.Pipeline
@@ -565,61 +568,63 @@ def custom_cv_search(processed_df, pipeline, param_grid, n_clusters=10):
         Dictionary of pipeline parameters to test.
     - n_clusters: int
         Number of manual clusters to evaluate.
-    
-    Returns:
+
+    Returns
+    -------
     - best_params: dict
         Best parameters that minimize the metric.
     - best_score: float
         Best average clust_len_diff_perc score.
     - scores: list
         List of average scores for each parameter combination.
+
     """
     # Initialize the parameter grid
     grid = ParameterGrid(param_grid)
-    best_score = float('inf')
+    best_score = float("inf")
     best_params = None
     scores = []
-    
+
     for params in grid:
         # Update pipeline parameters
         pipeline.set_params(**params)
-        
+
         # Fit the pipeline and transform the data
         processed_data = pipeline.fit_transform(processed_df)
-        
+
         total_diff_perc = 0
-        
+
         for i in range(n_clusters):
             # Filter manual cluster
-            df1 = processed_data[processed_data['cluster'] == i]
-            
+            df1 = processed_data[processed_data["cluster"] == i]
+
             if len(df1) == 0:  # Skip if the cluster is empty
                 continue
-            
+
             # Get the spatiotemporal_cluster_id for the manual cluster
-            stc_id = df1.iloc[0]['spatiotemporal_cluster_id']
-            
+            stc_id = df1.iloc[0]["spatiotemporal_cluster_id"]
+
             # Compute cluster sizes
             manual_clust_len = len(df1)
-            algo_clust_len = len(processed_data[processed_data['spatiotemporal_cluster_id'] == stc_id])
-            
+            algo_clust_len = len(processed_data[processed_data["spatiotemporal_cluster_id"] == stc_id])
+
             # Compute percentage difference
             clust_len_diff_perc = abs(manual_clust_len - algo_clust_len) / manual_clust_len
             total_diff_perc += clust_len_diff_perc
-        
+
         # Average percentage difference for this parameter combination
         avg_diff_perc = total_diff_perc / n_clusters
         scores.append(avg_diff_perc)
-        
+
         # Update best parameters if current score is better
         if avg_diff_perc < best_score:
             best_score = avg_diff_perc
             best_params = params
-    
+
     return best_params, best_score, scores
 
 # Example Usage
 param_grid = {
-    'spatial_dbscan__e_dist': [.1, 1, 5, 10, 15, 20],
-    'temporal_dbscan__e_days': [3, 5, 7, 9, 10]
+    "spatial_dbscan__e_dist": [.1, 1, 5, 10, 15, 20],
+    "temporal_dbscan__e_days": [3, 5, 7, 9, 10]
 }
