@@ -7,7 +7,7 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: rootpassword
       MYSQL_USER: myuser
-      MYSQL_PASSWORD: mypassword
+      MYSQL_PASSWORD: examplepw
       MYSQL_DATABASE: exped_cluster_db
     command: >
       --max_allowed_packet=256M
@@ -28,7 +28,7 @@ services:
     environment:
       PMA_HOST: mysql
       PMA_USER: myuser
-      PMA_PASSWORD: mypassword
+      PMA_PASSWORD: examplepw
     ports:
       - "8081:80"
     depends_on:
