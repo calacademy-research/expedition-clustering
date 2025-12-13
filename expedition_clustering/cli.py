@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pandas as pd
 import pymysql
-import numpy as np
+
 from expedition_clustering import create_pipeline
 
 
@@ -241,7 +241,7 @@ def main():
         logger.error("Make sure the database is running: docker-compose up -d")
         sys.exit(1)
 
-    except MemoryError as e:
+    except MemoryError:
         logger.error("Out of memory! Try one of these solutions:")
         logger.error("  1. Use --limit to process fewer specimens")
         logger.error("  2. Add geographic/temporal filters to the query")

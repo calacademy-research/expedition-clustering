@@ -9,6 +9,7 @@ from sklearn.metrics import adjusted_rand_score, make_scorer
 from sklearn.model_selection import GridSearchCV, KFold, ParameterGrid
 from sklearn.pipeline import Pipeline
 
+
 # Step 1: Custom Transformer for Preprocessing
 class Preprocessor(BaseEstimator, TransformerMixin):
     def __init__(self):
@@ -383,7 +384,7 @@ class IterativeSpatiotemporalClustering(BaseEstimator, TransformerMixin):
         X = X.copy()
 
         last_error = None
-        for _ in range(self.max_iter):
+        for iteration in range(1, self.max_iter + 1):
             X = self.temporal_dbscan.transform(X)
             X = self.spatial_reconnect.transform(X)
             X = self.temporal_recompute.transform(X)
@@ -398,7 +399,9 @@ class IterativeSpatiotemporalClustering(BaseEstimator, TransformerMixin):
             stc_n = X["spatiotemporal_cluster_id"].nunique() if "spatiotemporal_cluster_id" in X.columns else 0
             spatial_bad, temporal_bad = self._disconnect_stats(X)
             logger.info(
-                "Iterative pass -> spatial:%s temporal:%s spatiotemporal:%s | spatial_bad:%s temporal_bad:%s",
+                "Iterative pass %s/%s -> spatial:%s temporal:%s spatiotemporal:%s | spatial_bad:%s temporal_bad:%s",
+                iteration,
+                self.max_iter,
                 spatial_n,
                 temporal_n,
                 stc_n,

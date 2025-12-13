@@ -21,7 +21,29 @@ Basic usage:
 """
 
 # Core clustering functionality (most users only need this)
-from .pipeline import create_pipeline
+# Database utilities (for advanced users and notebooks)
+from .data import DatabaseConfig, fetch_table, load_core_tables
+
+# Pipeline components (for customization)
+# Evaluation utilities (experimental, not recommended for production)
+from .pipeline import (
+    CombineClusters,
+    IterativeSpatiotemporalClustering,
+    Preprocessor,
+    SpatialDBSCAN,
+    SpatialReconnectWithinSpatiotemporal,
+    SpatialReconnectWithinTemporal,
+    TemporalDBSCAN,
+    TemporalDBSCANRecompute,
+    TemporalReconnectWithinSpatiotemporal,
+    ValidateSpatiotemporalConnectivity,
+    cluster_pipeline_scorer,
+    create_pipeline,
+    custom_cv_search,
+    kfold_analysis,
+    partial_ari_with_penalty,
+    penalized_ari_scorer,
+)
 
 # Visualization functions
 from .plotting import (
@@ -31,37 +53,11 @@ from .plotting import (
     plot_time_histogram,
 )
 
-# Database utilities (for advanced users and notebooks)
-from .data import DatabaseConfig, fetch_table, load_core_tables
-
 # Preprocessing utilities (for advanced users and notebooks)
 from .preprocessing import (
     build_clean_dataframe,
     clean_for_clustering,
     merge_core_tables,
-)
-
-# Pipeline components (for customization)
-from .pipeline import (
-    CombineClusters,
-    Preprocessor,
-    SpatialDBSCAN,
-    TemporalDBSCANRecompute,
-    TemporalDBSCAN,
-    SpatialReconnectWithinTemporal,
-    SpatialReconnectWithinSpatiotemporal,
-    TemporalReconnectWithinSpatiotemporal,
-    IterativeSpatiotemporalClustering,
-    ValidateSpatiotemporalConnectivity,
-)
-
-# Evaluation utilities (experimental, not recommended for production)
-from .pipeline import (
-    cluster_pipeline_scorer,
-    custom_cv_search,
-    kfold_analysis,
-    partial_ari_with_penalty,
-    penalized_ari_scorer,
 )
 
 __all__ = [
