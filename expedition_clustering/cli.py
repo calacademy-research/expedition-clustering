@@ -42,7 +42,7 @@ def main():
     parser.add_argument("--host", default="localhost", help="MySQL host (default: localhost)")
     parser.add_argument("--port", type=int, default=3306, help="MySQL port (default: 3306)")
     parser.add_argument("--user", default="myuser", help="MySQL user (default: myuser)")
-    parser.add_argument("--password", default="examplepw", help="MySQL password")
+    parser.add_argument("--password", default="mypassword", help="MySQL password")
     parser.add_argument(
         "--database",
         default="exped_cluster_db",

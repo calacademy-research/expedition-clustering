@@ -7,7 +7,7 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: rootpassword
       MYSQL_USER: myuser
-      MYSQL_PASSWORD: examplepw
+      MYSQL_PASSWORD: mypassword
       MYSQL_DATABASE: exped_cluster_db
     command: >
       --max_allowed_packet=256M
