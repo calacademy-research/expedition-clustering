@@ -160,42 +160,47 @@ def main():
             logger.info("Loading all specimens from database (this may take a while)...")
 
         # Load data
-        df = pd.read_sql_query(query, conn)
+        records_df = pd.read_sql_query(query, conn)
         conn.close()
 
-        logger.info("Loaded %d rows", len(df))
+        logger.info("Loaded %d rows", len(records_df))
 
-        if df.empty:
+        if records_df.empty:
             logger.error("No data loaded from database!")
             sys.exit(1)
 
         # Normalize column names
-        df.columns = df.columns.str.lower()
+        records_df.columns = records_df.columns.str.lower()
 
         # Convert dates
-        df["startdate"] = pd.to_datetime(df["startdate"], errors="coerce")
-        df["enddate"] = pd.to_datetime(df["enddate"], errors="coerce")
+        records_df["startdate"] = pd.to_datetime(records_df["startdate"], errors="coerce")
+        records_df["enddate"] = pd.to_datetime(records_df["enddate"], errors="coerce")
 
         # Fill in missing precise coordinates with geography centroids (only if --include-centroids)
         if args.include_centroids:
-            df["latitude1"] = df["latitude1"].fillna(df["centroidlat"])
-            df["longitude1"] = df["longitude1"].fillna(df["centroidlon"])
-            logger.info("Filled missing coordinates with %d geography centroids",
-                       df["latitude1"].notna().sum() - (df["latitude1"].notna() & df["centroidlat"].isna()).sum())
+            records_df["latitude1"] = records_df["latitude1"].fillna(records_df["centroidlat"])
+            records_df["longitude1"] = records_df["longitude1"].fillna(records_df["centroidlon"])
+            logger.info(
+                "Filled missing coordinates with %d geography centroids",
+                records_df["latitude1"].notna().sum()
+                - (records_df["latitude1"].notna() & records_df["centroidlat"].isna()).sum(),
+            )
 
         # Drop rows without coordinates or dates
-        initial_count = len(df)
-        df = df[df["latitude1"].notna() & df["longitude1"].notna() & df["startdate"].notna()]
-        dropped = initial_count - len(df)
+        initial_count = len(records_df)
+        records_df = records_df[
+            records_df["latitude1"].notna() & records_df["longitude1"].notna() & records_df["startdate"].notna()
+        ]
+        dropped = initial_count - len(records_df)
 
         if dropped > 0:
             logger.warning("Dropped %d rows with missing data after loading", dropped)
 
-        if df.empty:
+        if records_df.empty:
             logger.error("No valid data remaining after cleaning!")
             sys.exit(1)
 
-        total_specimens = len(df)
+        total_specimens = len(records_df)
         logger.info("Processing %d specimens...", total_specimens)
 
         logger.info("Processing entire dataset in a single pass...")
@@ -206,7 +211,7 @@ def main():
         )
 
         pipeline = create_pipeline(e_dist=args.e_dist, e_days=args.e_days)
-        clustered = process_batch(df, pipeline, logger)
+        clustered = process_batch(records_df, pipeline, logger)
 
         # Report results
         num_clusters = clustered["spatiotemporal_cluster_id"].nunique()

@@ -9,7 +9,7 @@ from expedition_clustering.pipeline import (
 
 
 def test_preprocessor_drops_invalid_and_duplicate_rows():
-    df = pd.DataFrame(
+    input_df = pd.DataFrame(
         {
             "collectingeventid": [1, 1, 2, 3, 4, 5],
             "latitude1": [0.0, 0.0, 95.0, 10.0, -20.0, 12.0],
@@ -25,7 +25,7 @@ def test_preprocessor_drops_invalid_and_duplicate_rows():
         }
     )
 
-    processed = Preprocessor().transform(df)
+    processed = Preprocessor().transform(input_df)
 
     assert len(processed) == 2  # duplicate removed and invalid rows dropped
     assert set(processed["collectingeventid"]) == {1, 5}
@@ -34,7 +34,7 @@ def test_preprocessor_drops_invalid_and_duplicate_rows():
 
 
 def test_create_pipeline_clusters_and_labels_output():
-    df = pd.DataFrame(
+    sample_df = pd.DataFrame(
         {
             "collectingeventid": [1, 2, 3, 4],
             "latitude1": [0.0, 0.001, 10.0, 10.001],
@@ -44,7 +44,7 @@ def test_create_pipeline_clusters_and_labels_output():
     )
 
     pipeline = create_pipeline(e_dist=1, e_days=5)
-    clustered = pipeline.fit_transform(df)
+    clustered = pipeline.fit_transform(sample_df)
 
     assert "spatiotemporal_cluster_id" in clustered.columns
     assert clustered["spatiotemporal_cluster_id"].nunique() == 2
@@ -53,7 +53,7 @@ def test_create_pipeline_clusters_and_labels_output():
 
 
 def test_validate_spatiotemporal_connectivity_raises_for_disconnected_clusters():
-    df = pd.DataFrame(
+    disconnected = pd.DataFrame(
         {
             "collectingeventid": [1, 2],
             "latitude1": [0.0, 0.0],
@@ -66,5 +66,5 @@ def test_validate_spatiotemporal_connectivity_raises_for_disconnected_clusters()
     )
 
     validator = ValidateSpatiotemporalConnectivity(e_dist=1, e_days=1)
-    with pytest.raises(ValueError):
-        validator.transform(df)
+    with pytest.raises(ValueError, match="spatially disconnected"):
+        validator.transform(disconnected)

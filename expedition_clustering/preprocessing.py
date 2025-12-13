@@ -122,16 +122,12 @@ def merge_core_tables(
     if logger:
         logger.debug("After event+object merge: %s rows", len(full_df))
 
-    full_df = full_df.merge(
-        locality_df[locality_cols], on="LocalityID", how="left"
-    )
+    full_df = full_df.merge(locality_df[locality_cols], on="LocalityID", how="left")
 
     if logger:
         logger.debug("After locality merge: %s rows", len(full_df))
 
-    full_df = full_df.merge(
-        geography_df[geography_cols], on="GeographyID", how="left"
-    )
+    full_df = full_df.merge(geography_df[geography_cols], on="GeographyID", how="left")
     if logger:
         logger.debug("Merged dataframe rows=%s", len(full_df))
     return full_df
@@ -156,29 +152,33 @@ def clean_for_clustering(
         If True (default), drop rows missing `StartDate`.
 
     """
-    df = merged_df.copy()
+    cleaned_df = merged_df.copy()
 
     # Normalize column names to lowercase for consistency
-    df.columns = df.columns.str.lower()
+    cleaned_df.columns = cleaned_df.columns.str.lower()
 
     for column in ("startdate", "enddate"):
-        df[column] = pd.to_datetime(df[column], errors="coerce")
+        cleaned_df[column] = pd.to_datetime(cleaned_df[column], errors="coerce")
 
     # Create unified lat/lon columns, preferring precise coordinates
-    df["latitude1"] = df["latitude1"].fillna(df["centroidlat"])
-    df["longitude1"] = df["longitude1"].fillna(df["centroidlon"])
+    cleaned_df["latitude1"] = cleaned_df["latitude1"].fillna(cleaned_df["centroidlat"])
+    cleaned_df["longitude1"] = cleaned_df["longitude1"].fillna(cleaned_df["centroidlon"])
 
     if drop_missing_spatial:
-        df = df[df["latitude1"].notna() & df["longitude1"].notna()]
+        cleaned_df = cleaned_df[cleaned_df["latitude1"].notna() & cleaned_df["longitude1"].notna()]
 
     if drop_missing_start_date:
-        df = df[df["startdate"].notna()]
+        cleaned_df = cleaned_df[cleaned_df["startdate"].notna()]
 
-    df = df.reset_index(drop=True)
-    df["spatial_flag"] = np.where(df["latitude1"].notna(), 1, 0)
+    cleaned_df = cleaned_df.reset_index(drop=True)
+    cleaned_df["spatial_flag"] = np.where(cleaned_df["latitude1"].notna(), 1, 0)
     if logger:
-        logger.debug("Clean dataframe rows=%s (spatial flag counts=%s)", len(df), df["spatial_flag"].value_counts(dropna=False).to_dict())
-    return df
+        logger.debug(
+            "Clean dataframe rows=%s (spatial flag counts=%s)",
+            len(cleaned_df),
+            cleaned_df["spatial_flag"].value_counts(dropna=False).to_dict(),
+        )
+    return cleaned_df
 
 
 def build_clean_dataframe(

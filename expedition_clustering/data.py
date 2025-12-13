@@ -30,7 +30,7 @@ class DatabaseConfig:
 
     host: str = "localhost"
     user: str = "myuser"
-    password: str = "mypassword"  # noqa: S105
+    password: str = "mypassword"
     database: str = "exped_cluster_db"
     port: int = 3306
     charset: str = "utf8mb4"
@@ -115,10 +115,7 @@ def fetch_table_by_ids(
         for start in range(0, len(clean_ids), chunk_size):
             chunk = clean_ids[start : start + chunk_size]
             placeholders = ", ".join(["%s"] * len(chunk))
-            query = (
-                f"SELECT {column_expr} FROM {table_name} "
-                f"WHERE {id_column} IN ({placeholders})"
-            )
+            query = f"SELECT {column_expr} FROM {table_name} WHERE {id_column} IN ({placeholders})"
             frames.append(pd.read_sql_query(query, conn, params=chunk))
 
     if not frames:
@@ -167,24 +164,22 @@ def load_core_tables(
     table_list = list(tables)
     data: dict[str, pd.DataFrame] = {}
 
-    def fetch_with_logging(
-        table_name: str, table_limit: int | None, where: str | None = None
-    ) -> pd.DataFrame:
+    def fetch_with_logging(table_name: str, table_limit: int | None, where: str | None = None) -> pd.DataFrame:
         if logger:
             msg = f"Fetching {table_name}"
             if table_limit:
                 msg += f" (limit={table_limit})"
             logger.info("%s...", msg)
         start = time.perf_counter()
-        df = fetch_table(config, table_name, limit=table_limit, where=where)
+        table_df = fetch_table(config, table_name, limit=table_limit, where=where)
         if logger:
             logger.info(
                 "Finished %s in %.2fs (rows=%s)",
                 table_name,
                 time.perf_counter() - start,
-                len(df),
+                len(table_df),
             )
-        return df
+        return table_df
 
     def related_fetch(table_name: str, id_column: str, ids: Sequence) -> pd.DataFrame:
         if logger:
@@ -195,7 +190,7 @@ def load_core_tables(
                 id_column,
             )
         start = time.perf_counter()
-        df = fetch_table_by_ids(
+        related_df = fetch_table_by_ids(
             config,
             table_name,
             id_column,
@@ -207,18 +202,16 @@ def load_core_tables(
                 "Finished %s in %.2fs (rows=%s)",
                 table_name,
                 time.perf_counter() - start,
-                len(df),
+                len(related_df),
             )
-        if df.empty:
+        if related_df.empty:
             if logger:
                 logger.warning(
                     "%s returned 0 related rows; falling back to limited fetch.",
                     table_name,
                 )
-            return fetch_with_logging(
-                table_name, table_limits.get(table_name) if table_limits else limit
-            )
-        return df
+            return fetch_with_logging(table_name, table_limits.get(table_name) if table_limits else limit)
+        return related_df
 
     if related_only:
         primary_table = primary_table.lower()
@@ -228,9 +221,7 @@ def load_core_tables(
             raise ValueError("collectingevent must be included when related_only=True")
         if primary_table == "collectionobject":
             object_limit = table_limits.get("collectionobject") if table_limits else limit
-            objects_df = fetch_with_logging(
-                "collectionobject", object_limit, where="CollectingEventID IS NOT NULL"
-            )
+            objects_df = fetch_with_logging("collectionobject", object_limit, where="CollectingEventID IS NOT NULL")
             if objects_df.empty:
                 raise ValueError(
                     "No collectionobject rows with CollectingEventID were retrieved. "
@@ -260,29 +251,19 @@ def load_core_tables(
             locality_ids = events_df["LocalityID"].dropna().unique().tolist()
 
             if "collectionobject" in table_list:
-                data["collectionobject"] = related_fetch(
-                    "collectionobject", "CollectingEventID", event_ids
-                )
+                data["collectionobject"] = related_fetch("collectionobject", "CollectingEventID", event_ids)
             if "locality" in table_list:
                 data["locality"] = related_fetch("locality", "LocalityID", locality_ids)
             if "geography" in table_list:
-                geography_ids = (
-                    data["locality"]["GeographyID"].dropna().unique().tolist()
-                    if "locality" in data
-                    else []
-                )
+                geography_ids = data["locality"]["GeographyID"].dropna().unique().tolist() if "locality" in data else []
                 data["geography"] = related_fetch("geography", "GeographyID", geography_ids)
 
         for table in table_list:
             if table in data:
                 continue
-            data[table] = fetch_with_logging(
-                table, table_limits.get(table) if table_limits else limit
-            )
+            data[table] = fetch_with_logging(table, table_limits.get(table) if table_limits else limit)
         return data
 
     for table in table_list:
-        data[table] = fetch_with_logging(
-            table, table_limits.get(table) if table_limits else limit
-        )
+        data[table] = fetch_with_logging(table, table_limits.get(table) if table_limits else limit)
     return data

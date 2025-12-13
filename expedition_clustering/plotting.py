@@ -9,27 +9,25 @@ from cartopy.io.shapereader import Reader
 from matplotlib.colors import LogNorm
 
 
-def plot_time_histogram(df, datetime_col="datetime", bins="auto"):
+def plot_time_histogram(data, datetime_col="datetime", bins="auto"):
     """
     Plots a histogram of records over time.
 
     Parameters
     ----------
-    - df (pd.DataFrame): DataFrame containing a datetime column.
+    - data (pd.DataFrame): DataFrame containing a datetime column.
     - datetime_col (str): Name of the datetime column.
     - bins (str or int): Number of bins ('auto' for automatic binning or int for manual).
 
     """
     # Ensure the datetime column is in datetime format
-    df[datetime_col] = pd.to_datetime(df[datetime_col])
+    data[datetime_col] = pd.to_datetime(data[datetime_col])
 
     # Create the figure
     _fig, ax = plt.subplots(figsize=(12, 6))
 
     # Plot histogram
-    _counts, _bin_edges, _ = ax.hist(
-        df[datetime_col], bins=bins, edgecolor="black", alpha=0.7
-    )
+    _counts, _bin_edges, _ = ax.hist(data[datetime_col], bins=bins, edgecolor="black", alpha=0.7)
 
     # Format x-axis for date readability
     ax.xaxis.set_major_locator(plt.MaxNLocator(10))
@@ -46,7 +44,7 @@ def plot_time_histogram(df, datetime_col="datetime", bins="auto"):
 
 
 def plot_geographical_positions(
-    df,
+    data,
     lat_col="lat",
     lon_col="lon",
     datetime_col="datetime",
@@ -61,7 +59,7 @@ def plot_geographical_positions(
 
     Parameters
     ----------
-    - df (pd.DataFrame): DataFrame containing latitude, longitude, and datetime columns.
+    - data (pd.DataFrame): DataFrame containing latitude, longitude, and datetime columns.
     - lat_col (str): Name of the latitude column.
     - lon_col (str): Name of the longitude column.
     - datetime_col (str): Name of the datetime column.
@@ -71,7 +69,7 @@ def plot_geographical_positions(
     # Create the figure and axis using PlateCarree projection
     _fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={"projection": ccrs.PlateCarree()})
 
-    df = df.sort_values(by=datetime_col)
+    data = data.sort_values(by=datetime_col)
 
     # Add map features (coastlines, countries, etc.)
     ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
@@ -85,36 +83,44 @@ def plot_geographical_positions(
     if plot_roads:
         roads_shp = shpreader.natural_earth(category="cultural", name="roads", resolution="10m")
         roads = Reader(roads_shp).geometries()
-        ax.add_geometries(roads, crs=ccrs.PlateCarree(),
-                        edgecolor="brown", facecolor="none", linewidth=0.5, alpha=0.7, label="Roads")
+        ax.add_geometries(
+            roads, crs=ccrs.PlateCarree(), edgecolor="brown", facecolor="none", linewidth=0.5, alpha=0.7, label="Roads"
+        )
 
     # Convert datetime to numeric for color mapping
-    datetime_numeric = pd.to_datetime(df[datetime_col]).astype(int) // 10**9
+    datetime_numeric = pd.to_datetime(data[datetime_col]).astype(int) // 10**9
     norm = mcolors.Normalize(vmin=datetime_numeric.min(), vmax=datetime_numeric.max())
     cmap = plt.cm.viridis
 
     # Plot each point on the map
     scatter = ax.scatter(
-        df[lon_col], df[lat_col],
+        data[lon_col],
+        data[lat_col],
         c=datetime_numeric,  # Color by datetime
-        cmap=cmap, s=50, alpha=0.7,
-        edgecolor="k", transform=ccrs.PlateCarree()
+        cmap=cmap,
+        s=50,
+        alpha=0.7,
+        edgecolor="k",
+        transform=ccrs.PlateCarree(),
     )
 
     # Plot lines connecting consecutive points if cluster_line is True
     if cluster_line:
-        for i in range(len(df) - 1):
+        for i in range(len(data) - 1):
             ax.plot(
-                [df.iloc[i][lon_col], df.iloc[i + 1][lon_col]],
-                [df.iloc[i][lat_col], df.iloc[i + 1][lat_col]],
-                color="red", linewidth=1, alpha=0.8, transform=ccrs.PlateCarree()
+                [data.iloc[i][lon_col], data.iloc[i + 1][lon_col]],
+                [data.iloc[i][lat_col], data.iloc[i + 1][lat_col]],
+                color="red",
+                linewidth=1,
+                alpha=0.8,
+                transform=ccrs.PlateCarree(),
             )
 
     # Plot lines connecting consecutive points if cluster_line is True
     if cluster_line:
-        for i in range(len(df) - 1):
-            lon1, lat1 = df.iloc[i][lon_col], df.iloc[i][lat_col]
-            lon2, lat2 = df.iloc[i + 1][lon_col], df.iloc[i + 1][lat_col]
+        for i in range(len(data) - 1):
+            lon1, lat1 = data.iloc[i][lon_col], data.iloc[i][lat_col]
+            lon2, lat2 = data.iloc[i + 1][lon_col], data.iloc[i + 1][lat_col]
 
             time1 = datetime_numeric.iloc[i]
             time2 = datetime_numeric.iloc[i + 1]
@@ -124,26 +130,23 @@ def plot_geographical_positions(
             avg_color = cmap(norm(avg_time))
 
             # Plot the line segment with the average color
-            ax.plot(
-                [lon1, lon2], [lat1, lat2],
-                color=avg_color, linewidth=2, alpha=0.8, transform=ccrs.PlateCarree()
-            )
+            ax.plot([lon1, lon2], [lat1, lat2], color=avg_color, linewidth=2, alpha=0.8, transform=ccrs.PlateCarree())
 
     # Set the extent based on zoom level
-    if isinstance(zoom, (int, float)):
+    if isinstance(zoom, (int | float)):
         # Calculate bounds for zoom
-        min_lat, max_lat = df[lat_col].min(), df[lat_col].max()
-        min_lon, max_lon = df[lon_col].min(), df[lon_col].max()
+        min_lat, max_lat = data[lat_col].min(), data[lat_col].max()
+        min_lon, max_lon = data[lon_col].min(), data[lon_col].max()
 
         # Buffer for visualization
         if max_lat == min_lat:
-            lat_buffer = 0.1 * (1 / zoom if isinstance(zoom, (int, float)) else 0.1)
+            lat_buffer = 0.1 * (1 / zoom if isinstance(zoom, (int | float)) else 0.1)
         else:
-            lat_buffer = (max_lat - min_lat) * (1 / zoom if isinstance(zoom, (int, float)) else 0.1)
+            lat_buffer = (max_lat - min_lat) * (1 / zoom if isinstance(zoom, (int | float)) else 0.1)
         if max_lon == min_lon:
-            lon_buffer = 0.1 * (1 / zoom if isinstance(zoom, (int, float)) else 0.1)
+            lon_buffer = 0.1 * (1 / zoom if isinstance(zoom, (int | float)) else 0.1)
         else:
-            lon_buffer = (max_lon - min_lon) * (1 / zoom if isinstance(zoom, (int, float)) else 0.1)
+            lon_buffer = (max_lon - min_lon) * (1 / zoom if isinstance(zoom, (int | float)) else 0.1)
 
         # Adjust for 3:2 aspect ratio
         if lon_buffer / lat_buffer > 3 / 2:
@@ -151,19 +154,17 @@ def plot_geographical_positions(
         else:
             lon_buffer = lat_buffer * (3 / 2)
 
-        extent = [min_lon - lon_buffer, max_lon + lon_buffer,
-                  min_lat - lat_buffer, max_lat + lat_buffer]
+        extent = [min_lon - lon_buffer, max_lon + lon_buffer, min_lat - lat_buffer, max_lat + lat_buffer]
         ax.set_extent(extent, crs=ccrs.PlateCarree())
 
     elif zoom == "auto":
-
         # Calculate bounds for zoom
-        min_lat, max_lat = df[lat_col].min(), df[lat_col].max()
-        min_lon, max_lon = df[lon_col].min(), df[lon_col].max()
+        min_lat, max_lat = data[lat_col].min(), data[lat_col].max()
+        min_lon, max_lon = data[lon_col].min(), data[lon_col].max()
 
         # Buffer for visualization
-        lat_buffer = (max_lat - min_lat) * (1 / zoom if isinstance(zoom, (int, float)) else 0.1)
-        lon_buffer = (max_lon - min_lon) * (1 / zoom if isinstance(zoom, (int, float)) else 0.1)
+        lat_buffer = (max_lat - min_lat) * (1 / zoom if isinstance(zoom, (int | float)) else 0.1)
+        lon_buffer = (max_lon - min_lon) * (1 / zoom if isinstance(zoom, (int | float)) else 0.1)
 
         # Adjust for 3:2 aspect ratio
         if lon_buffer / lat_buffer > 3 / 2:
@@ -171,8 +172,7 @@ def plot_geographical_positions(
         else:
             lon_buffer = lat_buffer * (3 / 2)
 
-        extent = [min_lon - lon_buffer, max_lon + lon_buffer,
-                  min_lat - lat_buffer, max_lat + lat_buffer]
+        extent = [min_lon - lon_buffer, max_lon + lon_buffer, min_lat - lat_buffer, max_lat + lat_buffer]
         ax.set_extent(extent, crs=ccrs.PlateCarree())
 
     elif zoom == "california":
@@ -190,8 +190,6 @@ def plot_geographical_positions(
     else:
         raise ValueError("Invalid zoom option. Choose from 'auto', 'california', 'us', 'world', or a numeric value.")
 
-
-
     # Add town names (filtered by the current extent)
     if extent and plot_towns:
         towns_shp = shpreader.natural_earth(category="cultural", name="populated_places", resolution="10m")
@@ -207,8 +205,7 @@ def plot_geographical_positions(
                 ax.plot(lon, lat, marker="o", color="red", markersize=3, transform=ccrs.PlateCarree())
 
                 # Annotate with the town name
-                ax.text(lon + 0.2, lat, town_name,
-                        fontsize=8, color="darkred", transform=ccrs.PlateCarree())
+                ax.text(lon + 0.2, lat, town_name, fontsize=8, color="darkred", transform=ccrs.PlateCarree())
 
     # Add color bar and format its labels as dates
     cbar = plt.colorbar(scatter, ax=ax, orientation="vertical")
@@ -226,31 +223,40 @@ def plot_geographical_positions(
     gl.ylabel_style = {"size": 10}
 
     # Add a distance scale in the bottom left corner
-    if isinstance(zoom, (int, float)) or zoom == "auto":
+    if isinstance(zoom, (int | float)) or zoom == "auto":
         # Calculate the approximate scale for the distance
         scale_km = (extent[1] - extent[0]) * 111 / 10  # Approximate 1 degree as 111 km
         scale_label = f"{int(scale_km)} km"
-        ax.plot([extent[0] + 0.05 * (extent[1] - extent[0]), extent[0] + 0.15 * (extent[1] - extent[0])],
-                [extent[2] + 0.05 * (extent[3] - extent[2]), extent[2] + 0.05 * (extent[3] - extent[2])],
-                transform=ccrs.PlateCarree(), color="black", linewidth=2)
-        ax.text(extent[0] + 0.16 * (extent[1] - extent[0]),
-                extent[2] + 0.05 * (extent[3] - extent[2]),
-                scale_label,
-                transform=ccrs.PlateCarree(), fontsize=10, color="black")
-
+        ax.plot(
+            [extent[0] + 0.05 * (extent[1] - extent[0]), extent[0] + 0.15 * (extent[1] - extent[0])],
+            [extent[2] + 0.05 * (extent[3] - extent[2]), extent[2] + 0.05 * (extent[3] - extent[2])],
+            transform=ccrs.PlateCarree(),
+            color="black",
+            linewidth=2,
+        )
+        ax.text(
+            extent[0] + 0.16 * (extent[1] - extent[0]),
+            extent[2] + 0.05 * (extent[3] - extent[2]),
+            scale_label,
+            transform=ccrs.PlateCarree(),
+            fontsize=10,
+            color="black",
+        )
 
     ax.set_title("Geographical Positions Over Time")
     plt.legend(loc="lower left", fontsize=10)
     plt.show()
 
 
-def plot_geographical_heatmap(df, lat_col="lat", lon_col="lon", zoom="auto", grid_size=100, plot_rivers=False, plot_roads=False):
+def plot_geographical_heatmap(
+    data, lat_col="lat", lon_col="lon", zoom="auto", grid_size=100, plot_rivers=False, plot_roads=False
+):
     """
     Plots a heatmap of geographical positions from a DataFrame based on record density overlaid on a detailed world map.
 
     Parameters
     ----------
-    - df (pd.DataFrame): DataFrame containing latitude and longitude columns.
+    - data (pd.DataFrame): DataFrame containing latitude and longitude columns.
     - lat_col (str): Name of the latitude column.
     - lon_col (str): Name of the longitude column.
     - zoom (str or float): Zoom level ('auto', 'california', 'us', 'world') or a numeric value to control lat/lon buffers inversely.
@@ -275,27 +281,25 @@ def plot_geographical_heatmap(df, lat_col="lat", lon_col="lon", zoom="auto", gri
         pass
 
     # Determine the map extent based on zoom level
-    if isinstance(zoom, (int, float)):
+    if isinstance(zoom, (int | float)):
         zoom_factor = 1 / zoom  # Inverse relationship
         # Calculate bounds for zoom
-        min_lat, max_lat = df[lat_col].min(), df[lat_col].max()
-        min_lon, max_lon = df[lon_col].min(), df[lon_col].max()
+        min_lat, max_lat = data[lat_col].min(), data[lat_col].max()
+        min_lon, max_lon = data[lon_col].min(), data[lon_col].max()
 
         # Buffer for visualization
         lat_buffer = (max_lat - min_lat) * zoom_factor
         lon_buffer = (max_lon - min_lon) * zoom_factor
 
-        extent = [min_lon - lon_buffer, max_lon + lon_buffer,
-                  min_lat - lat_buffer, max_lat + lat_buffer]
+        extent = [min_lon - lon_buffer, max_lon + lon_buffer, min_lat - lat_buffer, max_lat + lat_buffer]
         ax.set_extent(extent, crs=ccrs.PlateCarree())
 
     elif zoom == "auto":
-        min_lat, max_lat = df[lat_col].min(), df[lat_col].max()
-        min_lon, max_lon = df[lon_col].min(), df[lon_col].max()
+        min_lat, max_lat = data[lat_col].min(), data[lat_col].max()
+        min_lon, max_lon = data[lon_col].min(), data[lon_col].max()
         lat_buffer = (max_lat - min_lat) * 0.1
         lon_buffer = (max_lon - min_lon) * 0.1
-        extent = [min_lon - lon_buffer, max_lon + lon_buffer,
-                  min_lat - lat_buffer, max_lat + lat_buffer]
+        extent = [min_lon - lon_buffer, max_lon + lon_buffer, min_lat - lat_buffer, max_lat + lat_buffer]
         ax.set_extent(extent, crs=ccrs.PlateCarree())
 
     elif zoom == "california":
@@ -312,16 +316,18 @@ def plot_geographical_heatmap(df, lat_col="lat", lon_col="lon", zoom="auto", gri
         raise ValueError("Invalid zoom option. Choose from 'auto', 'california', 'us', 'world', or a numeric value.")
 
     # Create a 2D histogram for the heatmap
-    lon_bins = np.linspace(df[lon_col].min(), df[lon_col].max(), grid_size)
-    lat_bins = np.linspace(df[lat_col].min(), df[lat_col].max(), grid_size)
-    heatmap, lon_edges, lat_edges = np.histogram2d(df[lon_col], df[lat_col], bins=[lon_bins, lat_bins])
+    lon_bins = np.linspace(data[lon_col].min(), data[lon_col].max(), grid_size)
+    lat_bins = np.linspace(data[lat_col].min(), data[lat_col].max(), grid_size)
+    heatmap, lon_edges, lat_edges = np.histogram2d(data[lon_col], data[lat_col], bins=[lon_bins, lat_bins])
 
     # Plot the heatmap
     lon_centers = (lon_edges[:-1] + lon_edges[1:]) / 2
     lat_centers = (lat_edges[:-1] + lat_edges[1:]) / 2
     lon_grid, lat_grid = np.meshgrid(lon_centers, lat_centers)
 
-    pcm = ax.pcolormesh(lon_grid, lat_grid, heatmap.T, cmap="winter", norm=LogNorm(), transform=ccrs.PlateCarree(), alpha=0.8)
+    pcm = ax.pcolormesh(
+        lon_grid, lat_grid, heatmap.T, cmap="winter", norm=LogNorm(), transform=ccrs.PlateCarree(), alpha=0.8
+    )
 
     # Add a color bar
     cbar = plt.colorbar(pcm, ax=ax, orientation="vertical", shrink=0.7)
@@ -335,23 +341,32 @@ def plot_geographical_heatmap(df, lat_col="lat", lon_col="lon", zoom="auto", gri
     gl.ylabel_style = {"size": 10}
 
     # Add a distance scale in the bottom left corner
-    if isinstance(zoom, (int, float)) or zoom == "auto":
+    if isinstance(zoom, (int | float)) or zoom == "auto":
         # Calculate the approximate scale for the distance
         scale_km = (extent[1] - extent[0]) * 111 / 10  # Approximate 1 degree as 111 km
         scale_label = f"{int(scale_km)} km"
-        ax.plot([extent[0] + 0.05 * (extent[1] - extent[0]), extent[0] + 0.15 * (extent[1] - extent[0])],
-                [extent[2] + 0.05 * (extent[3] - extent[2]), extent[2] + 0.05 * (extent[3] - extent[2])],
-                transform=ccrs.PlateCarree(), color="black", linewidth=2)
-        ax.text(extent[0] + 0.16 * (extent[1] - extent[0]),
-                extent[2] + 0.05 * (extent[3] - extent[2]),
-                scale_label,
-                transform=ccrs.PlateCarree(), fontsize=10, color="black")
+        ax.plot(
+            [extent[0] + 0.05 * (extent[1] - extent[0]), extent[0] + 0.15 * (extent[1] - extent[0])],
+            [extent[2] + 0.05 * (extent[3] - extent[2]), extent[2] + 0.05 * (extent[3] - extent[2])],
+            transform=ccrs.PlateCarree(),
+            color="black",
+            linewidth=2,
+        )
+        ax.text(
+            extent[0] + 0.16 * (extent[1] - extent[0]),
+            extent[2] + 0.05 * (extent[3] - extent[2]),
+            scale_label,
+            transform=ccrs.PlateCarree(),
+            fontsize=10,
+            color="black",
+        )
 
     ax.set_title("Geographical Density Heatmap")
     plt.show()
 
+
 def plot_geographical_heatmap_by_day(
-    df,
+    data,
     lat_col="lat",
     lon_col="lon",
     datetime_col="datetime",
@@ -365,7 +380,7 @@ def plot_geographical_heatmap_by_day(
 
     Parameters
     ----------
-    - df (pd.DataFrame): DataFrame containing latitude, longitude, and datetime columns.
+    - data (pd.DataFrame): DataFrame containing latitude, longitude, and datetime columns.
     - lat_col (str): Name of the latitude column.
     - lon_col (str): Name of the longitude column.
     - datetime_col (str): Name of the datetime column.
@@ -375,16 +390,16 @@ def plot_geographical_heatmap_by_day(
     - plot_roads (bool): Whether to plot roads on the map.
 
     """
-    df[datetime_col] = pd.to_datetime(df[datetime_col])
-    df["date"] = df[datetime_col].dt.date
+    data[datetime_col] = pd.to_datetime(data[datetime_col])
+    data["date"] = data[datetime_col].dt.date
 
     _ = zoom  # parameter retained for API consistency; not used in extent calculation
-    unique_dates = sorted(df["date"].unique())
+    unique_dates = sorted(data["date"].unique())
     num_days = len(unique_dates)
 
     # Determine the overall extent to ensure consistent zoom across subplots
-    min_lat, max_lat = df[lat_col].min(), df[lat_col].max()
-    min_lon, max_lon = df[lon_col].min(), df[lon_col].max()
+    min_lat, max_lat = data[lat_col].min(), data[lat_col].max()
+    min_lon, max_lon = data[lon_col].min(), data[lon_col].max()
     lat_buffer = (max_lat - min_lat) * 0.1
     lon_buffer = (max_lon - min_lon) * 0.1
     extent = [min_lon - lon_buffer, max_lon + lon_buffer, min_lat - lat_buffer, max_lat + lat_buffer]
@@ -392,7 +407,7 @@ def plot_geographical_heatmap_by_day(
     # Calculate global min and max for heatmap values
     lon_bins = np.linspace(min_lon, max_lon, grid_size)
     lat_bins = np.linspace(min_lat, max_lat, grid_size)
-    global_heatmap = np.histogram2d(df[lon_col], df[lat_col], bins=[lon_bins, lat_bins])[0]
+    global_heatmap = np.histogram2d(data[lon_col], data[lat_col], bins=[lon_bins, lat_bins])[0]
     vmin = global_heatmap[global_heatmap > 0].min() if np.any(global_heatmap > 0) else 1
     vmax = global_heatmap.max() if np.isfinite(global_heatmap.max()) else 10
 
@@ -408,7 +423,7 @@ def plot_geographical_heatmap_by_day(
     axes = axes.flatten()
 
     for ax, current_date in zip(axes, unique_dates, strict=False):
-        daily_df = df[df["date"] == current_date]
+        daily_df = data[data["date"] == current_date]
 
         # Add map features (coastlines, countries, etc.)
         ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
@@ -432,7 +447,15 @@ def plot_geographical_heatmap_by_day(
         lat_centers = (lat_edges[:-1] + lat_edges[1:]) / 2
         lon_grid, lat_grid = np.meshgrid(lon_centers, lat_centers)
 
-        pcm = ax.pcolormesh(lon_grid, lat_grid, heatmap.T, cmap="winter", norm=LogNorm(vmin=vmin, vmax=vmax), transform=ccrs.PlateCarree(), alpha=0.8)
+        pcm = ax.pcolormesh(
+            lon_grid,
+            lat_grid,
+            heatmap.T,
+            cmap="winter",
+            norm=LogNorm(vmin=vmin, vmax=vmax),
+            transform=ccrs.PlateCarree(),
+            alpha=0.8,
+        )
 
         # Add a color bar
         cbar = plt.colorbar(pcm, ax=ax, orientation="vertical", shrink=0.7)
@@ -448,7 +471,7 @@ def plot_geographical_heatmap_by_day(
         ax.set_title(f"Heatmap for {current_date}")
 
     # Turn off unused subplots
-    for ax in axes[len(unique_dates):]:
+    for ax in axes[len(unique_dates) :]:
         ax.set_visible(False)
 
     plt.tight_layout()
