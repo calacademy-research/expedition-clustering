@@ -20,9 +20,7 @@ fi
 mkdir -p "$(dirname "${dst}")"
 
 gzip -cd "${src}" \
-  | sed \
-      -e 's/NO_AUTO_CREATE_USER//g' \
-      -e 's/DEFINER=`[^`]\+`@`[^`]\+`/DEFINER=CURRENT_USER/g' \
+  | perl -pe 's/NO_AUTO_CREATE_USER//gi; s/DEFINER=`[^`]+`@`[^`]+`/DEFINER=CURRENT_USER/gi' \
   | gzip > "${dst}"
 
 echo "Wrote cleaned dump to ${dst}"

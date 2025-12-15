@@ -53,10 +53,13 @@ pip install -e .
   - `MYSQL_ROOT_PASSWORD`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`
   - `MYSQL_PORT` (host port to expose 3306)
   - `SQL_DUMP_PATH` (path to a cleaned dump, e.g., `./data/cas-db.cleaned.sql.gz`)
-- Clean your dump for MySQL 5.7/8+ (strip legacy SQL modes/definers):
+- Clean your dump for MySQL 5.7/8+ (strip legacy SQL modes/definers). Run this whenever you swap in a new dump:
   ```bash
+  # Convert your raw dump to a cleaned copy (no NO_AUTO_CREATE_USER, definers set to CURRENT_USER)
   scripts/clean_dump.sh ./data/raw-dump.sql.gz ./data/cas-db.cleaned.sql.gz
-  export SQL_DUMP_PATH=./data/cas-db.cleaned.sql.gz  # or set it in .env
+
+  # Point Docker at the cleaned dump (either export here or set in .env)
+  export SQL_DUMP_PATH=./data/cas-db.cleaned.sql.gz
   ```
 - Start the stack (seeds the DB once per fresh volume):
 ```bash
