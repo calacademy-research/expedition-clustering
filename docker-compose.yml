@@ -1,23 +1,24 @@
-version: '3.8'
-
 services:
   mysql:
     image: mysql:5.7
     platform: linux/amd64
     container_name: exped_cluster_mysql_container
+    env_file:
+      - .env
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_USER: myuser
-      MYSQL_PASSWORD: mypassword
-      MYSQL_DATABASE: exped_cluster_db
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
     command: >
       --max_allowed_packet=256M
       --net_buffer_length=16K
       --log-bin-trust-function-creators=ON
     volumes:
       - exped_cluster_mysql_data:/var/lib/mysql
+      - ${SQL_DUMP_PATH}:/docker-entrypoint-initdb.d/cas-db.sql.gz
     ports:
-      - "3306:3306"
+      - "${MYSQL_PORT}:3306"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
       interval: 10s
@@ -26,10 +27,12 @@ services:
     image: phpmyadmin/phpmyadmin
     platform: linux/amd64
     container_name: exped_cluster_phpmyadmin_container
+    env_file:
+      - .env
     environment:
-      PMA_HOST: mysql
-      PMA_USER: myuser
-      PMA_PASSWORD: mypassword
+      PMA_HOST: ${PMA_HOST}
+      PMA_USER: ${MYSQL_USER}
+      PMA_PASSWORD: ${MYSQL_PASSWORD}
     ports:
       - "8081:80"
     depends_on:

@@ -48,11 +48,15 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-3) Start MySQL (matches docker-compose defaults: host=localhost, user=myuser, password=mypassword, db=exped_cluster_db)
+3) Configure and start MySQL via Docker
+- Copy `.env.example` to `.env` and set:
+  - `MYSQL_ROOT_PASSWORD`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`
+  - `MYSQL_PORT` (host port to expose 3306)
+  - `SQL_DUMP_PATH` (path to your dump, e.g., `./data/cas-db.sql.gz`)
+- Start the stack (seeds the DB once per fresh volume):
 ```bash
+docker-compose down -v   # only when you want to reseed
 docker-compose up -d
-# Load your dump if needed:
-# docker exec -i exped_cluster_mysql_container mysql -u root -prootpassword exped_cluster_db < path/to/backup.sql
 ```
 
 ## Usage
@@ -102,7 +106,7 @@ If the clean DataFrame is empty, raise the `limit`, switch `primary_table="colle
 ## Project Structure
 ```
 expedition-clustering/
-├── docker-compose.yml             # MySQL configuration used in notebooks and CLI
+├── docker-compose.yml             # MySQL/PMA stack (reads credentials/dump path from .env)
 ├── expedition_clustering/
 │   ├── cli.py                     # expedition-cluster entry point
 │   ├── data.py                    # Database connectors and table loaders
