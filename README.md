@@ -48,11 +48,16 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-3) Configure and start MySQL via Docker
+3) Prepare and start MySQL via Docker
 - Copy `.env.example` to `.env` and set:
   - `MYSQL_ROOT_PASSWORD`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`
   - `MYSQL_PORT` (host port to expose 3306)
-  - `SQL_DUMP_PATH` (path to your dump, e.g., `./data/cas-db.sql.gz`)
+  - `SQL_DUMP_PATH` (path to a cleaned dump, e.g., `./data/cas-db.cleaned.sql.gz`)
+- Clean your dump for MySQL 5.7/8+ (strip legacy SQL modes/definers):
+  ```bash
+  scripts/clean_dump.sh ./data/raw-dump.sql.gz ./data/cas-db.cleaned.sql.gz
+  export SQL_DUMP_PATH=./data/cas-db.cleaned.sql.gz  # or set it in .env
+  ```
 - Start the stack (seeds the DB once per fresh volume):
 ```bash
 docker-compose down -v   # only when you want to reseed
