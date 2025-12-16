@@ -13,10 +13,10 @@ services:
     command: >
       --max_allowed_packet=256M
       --net_buffer_length=16K
-      --log-bin-trust-function-creators=ON
     volumes:
       - exped_cluster_mysql_data:/var/lib/mysql
-      - ${SQL_DUMP_PATH}:/docker-entrypoint-initdb.d/cas-db.sql.gz
+      - ${SQL_DUMP_PATH}:/tmp/cas-db.sql.gz
+      - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
     ports:
       - "${MYSQL_PORT}:3306"
     healthcheck:
