@@ -16,7 +16,7 @@ services:
     volumes:
       - exped_cluster_mysql_data:/var/lib/mysql
       - ${SQL_DUMP_PATH}:/tmp/cas-db.sql.gz
-      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+      - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
     ports:
       - "${MYSQL_PORT}:3306"
     healthcheck:

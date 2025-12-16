@@ -52,33 +52,82 @@ pip install -e .
 - Copy `.env.example` to `.env` and set:
   - `MYSQL_ROOT_PASSWORD`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`
   - `MYSQL_PORT` (host port to expose 3306)
-  - `SQL_DUMP_PATH` (path to a cleaned dump, e.g., `./data/cas-db.cleaned.sql.gz`)
-- Clean your dump for MySQL 5.7/8+ (strip legacy SQL modes/definers). Run this whenever you swap in a new dump:
-  ```bash
-  # Convert your raw dump to a cleaned copy (no NO_AUTO_CREATE_USER, definers set to CURRENT_USER)
-  scripts/clean_dump.sh ./data/raw-dump.sql.gz ./data/cas-db.cleaned.sql.gz
+  - `SQL_DUMP_PATH` (path to your SQL dump, e.g., `./data/CASBotanybackup.sql.gz`)
 
-  # Point Docker at the cleaned dump (either export here or set in .env)
-  export SQL_DUMP_PATH=./data/cas-db.cleaned.sql.gz
+- **Option A: Direct import with on-the-fly cleaning (simpler)**
+  ```bash
+  # Point .env to your raw dump
+  # SQL_DUMP_PATH=./data/CASBotanybackup.sql.gz
+
+  docker compose down -v
+  docker compose up -d
   ```
-- Start the stack (seeds the DB once per fresh volume):
-```bash
-docker-compose down -v   # only when you want to reseed
-docker-compose up -d
-```
+  Note: First-time database initialization takes **20-30 minutes** for a 500MB compressed dump (~2-4GB uncompressed, ~20M lines). The init script automatically strips DEFINER clauses during import.
+
+- **Option B: Pre-clean the dump for faster restarts (recommended for development)**
+  ```bash
+  # Clean your dump once (takes ~5 minutes)
+  ./scripts/clean_dump.sh ./data/raw-dump.sql.gz ./data/cleaned-dump.sql.gz
+
+  # Update .env to point to the cleaned dump
+  # SQL_DUMP_PATH=./data/cleaned-dump.sql.gz
+
+  docker compose down -v
+  docker compose up -d
+  ```
+  Using a pre-cleaned dump reduces initialization time to **~10-15 minutes**.
 
 ## Usage
 
 ### Command line
-Run the full pipeline directly against the database:
+The `expedition-cluster` command runs the full spatiotemporal DBSCAN pipeline directly against your MySQL database. It loads specimen data, applies cleaning and preprocessing, clusters specimens into expeditions, and outputs the results to a CSV file.
+
+#### Basic usage:
 ```bash
 uv run expedition-cluster \
   --e-dist 10 \
   --e-days 7 \
-  --limit 50000 \
   --output data/clustered_expeditions.csv
 ```
-Flags of note: `--include-centroids` fills missing locality coordinates with geography centroids; `--log-level DEBUG` surfaces validation details.
+
+#### Key options:
+
+**Clustering parameters:**
+- `--e-dist DISTANCE` - Spatial epsilon in kilometers. Maximum distance between specimens to be in the same cluster (default: 10.0)
+- `--e-days DAYS` - Temporal epsilon in days. Maximum time gap between specimens to be in the same cluster (default: 7.0)
+
+**Database connection:**
+- `--host HOST` - MySQL host (default: localhost)
+- `--port PORT` - MySQL port (default: 3306)
+- `--user USER` - MySQL user (default: myuser)
+- `--password PASSWORD` - MySQL password
+- `--database DATABASE` - Database name (default: exped_cluster_db)
+
+**Data filtering:**
+- `--limit N` - Process only first N specimens (useful for testing)
+- `--include-centroids` - Include specimens with only geography centroids (less precise). By default, only specimens with precise locality coordinates are used.
+
+**Output:**
+- `--output PATH` - Output CSV file path (default: data/clustered_expeditions.csv)
+- `--log-level LEVEL` - Logging verbosity: DEBUG, INFO, WARNING, ERROR (default: INFO)
+
+#### Example with common options:
+```bash
+# Test run with 5000 specimens at higher verbosity
+uv run expedition-cluster \
+  --e-dist 15 \
+  --e-days 10 \
+  --limit 5000 \
+  --log-level DEBUG \
+  --output data/test_clusters.csv
+
+# Production run with centroids included
+uv run expedition-cluster \
+  --e-dist 10 \
+  --e-days 7 \
+  --include-centroids \
+  --output data/expeditions_full.csv
+```
 
 ### Python API
 ```python
@@ -115,6 +164,9 @@ If the clean DataFrame is empty, raise the `limit`, switch `primary_table="colle
 ```
 expedition-clustering/
 ├── docker-compose.yml             # MySQL/PMA stack (reads credentials/dump path from .env)
+├── scripts/
+│   ├── clean_dump.sh              # Pre-process SQL dumps to remove DEFINER clauses
+│   └── init-db.sh                 # Docker entrypoint script for database initialization
 ├── expedition_clustering/
 │   ├── cli.py                     # expedition-cluster entry point
 │   ├── data.py                    # Database connectors and table loaders

@@ -1,26 +1,30 @@
-#!/usr/bin/env bash
-# Clean a MySQL dump for MySQL 5.7/8+: remove NO_AUTO_CREATE_USER and rewrite definers to CURRENT_USER.
-# Usage: scripts/clean_dump.sh path/to/source.sql.gz path/to/output.sql.gz
+#!/bin/bash
+# Clean SQL dump by removing DEFINER clauses for MySQL 5.7+ compatibility
+# Usage: ./scripts/clean_dump.sh <input.sql.gz> <output.sql.gz>
 
-set -euo pipefail
+set -e
 
-src="${1:-}"
-dst="${2:-}"
-
-if [[ -z "${src}" || -z "${dst}" ]]; then
-  echo "Usage: $0 source.sql.gz output.sql.gz" >&2
-  exit 1
+if [ $# -ne 2 ]; then
+    echo "Usage: $0 <input.sql.gz> <output.sql.gz>"
+    echo "Example: $0 ./data/raw-dump.sql.gz ./data/cleaned-dump.sql.gz"
+    exit 1
 fi
 
-if [[ ! -f "${src}" ]]; then
-  echo "Source dump not found: ${src}" >&2
-  exit 1
+INPUT_FILE="$1"
+OUTPUT_FILE="$2"
+
+if [ ! -f "$INPUT_FILE" ]; then
+    echo "Error: Input file '$INPUT_FILE' not found"
+    exit 1
 fi
 
-mkdir -p "$(dirname "${dst}")"
+echo "Cleaning SQL dump..."
+echo "  Input:  $INPUT_FILE"
+echo "  Output: $OUTPUT_FILE"
 
-gzip -cd "${src}" \
-  | perl -pe 's/NO_AUTO_CREATE_USER//gi; s/DEFINER=`[^`]+`@`[^`]+`/DEFINER=CURRENT_USER/gi' \
-  | gzip > "${dst}"
+# Decompress, remove DEFINER clauses, and recompress
+gunzip -c "$INPUT_FILE" | \
+  sed -E 's/DEFINER[ ]*=[ ]*(`[^`]+`|[^ ]+)@(`[^`]+`|[^ ]+)//g' | \
+  gzip > "$OUTPUT_FILE"
 
-echo "Wrote cleaned dump to ${dst}"
+echo "✓ Cleaned dump created successfully!"
