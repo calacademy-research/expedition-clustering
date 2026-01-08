@@ -9,6 +9,7 @@ Features:
 Usage:
     expedition-cluster --output clustered_data.csv
     expedition-cluster --e-dist 15 --e-days 10
+    expedition-cluster verify-redaction --input data/clustered_expeditions_redacted.csv
 """
 
 import argparse
@@ -20,6 +21,15 @@ import pandas as pd
 import pymysql
 
 from expedition_clustering import create_pipeline
+from expedition_clustering.data import DatabaseConfig
+from expedition_clustering.redaction import (
+    DEFAULT_COORDINATE_COLUMNS,
+    DEFAULT_LOCALITY_TEXT_COLUMNS,
+    fetch_redaction_flags,
+    redact_clustered_dataframe,
+    verify_redacted_csv,
+    verify_redacted_csv_drop,
+)
 
 
 def process_batch(df_batch, pipeline, logger):
@@ -33,12 +43,7 @@ def process_batch(df_batch, pipeline, logger):
         raise
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Cluster botanical specimens into expeditions using spatiotemporal DBSCAN"
-    )
-
-    # Database connection
+def _add_db_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--host", default="localhost", help="MySQL host (default: localhost)")
     parser.add_argument("--port", type=int, default=3306, help="MySQL port (default: 3306)")
     parser.add_argument("--user", default="myuser", help="MySQL user (default: myuser)")
@@ -49,7 +54,18 @@ def main():
         help="Database name (default: exped_cluster_db)",
     )
 
-    # Clustering parameters
+
+def _add_log_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging level (default: INFO)",
+    )
+
+
+def _add_cluster_args(parser: argparse.ArgumentParser) -> None:
+    _add_db_args(parser)
     parser.add_argument(
         "--e-dist",
         type=float,
@@ -62,8 +78,6 @@ def main():
         default=7.0,
         help="Temporal epsilon in days - max time gap between specimens in same cluster (default: 7.0)",
     )
-
-    # Data options
     parser.add_argument(
         "--limit",
         type=int,
@@ -81,24 +95,60 @@ def main():
         default=Path("data/clustered_expeditions.csv"),
         help="Output CSV file path (default: data/clustered_expeditions.csv)",
     )
+    redaction_group = parser.add_mutually_exclusive_group()
+    redaction_group.add_argument(
+        "--redact",
+        action="store_true",
+        help="Apply IPT redaction rules (mask locality text and remove coordinates) before writing output",
+    )
+    redaction_group.add_argument(
+        "--drop-redacted",
+        action="store_true",
+        help="Drop records flagged for redaction instead of masking fields",
+    )
+    _add_log_args(parser)
 
-    # Logging
+
+def _add_verify_args(parser: argparse.ArgumentParser) -> None:
+    _add_db_args(parser)
     parser.add_argument(
-        "--log-level",
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Logging level (default: INFO)",
+        "--input",
+        type=Path,
+        required=True,
+        help="Redacted clustered CSV file to verify",
     )
-
-    args = parser.parse_args()
-
-    # Setup logging
-    logging.basicConfig(
-        level=getattr(logging, args.log_level),
-        format="%(asctime)s - %(levelname)s - %(message)s",
+    parser.add_argument(
+        "--expect-dropped",
+        action="store_true",
+        help="Expect redacted records to be dropped rather than masked",
     )
+    parser.add_argument(
+        "--id-column",
+        default="collectionobjectid",
+        help="Column name used to join redaction flags (default: collectionobjectid)",
+    )
+    parser.add_argument(
+        "--redacted-placeholder",
+        default="*",
+        help="Placeholder used for redacted locality text (default: *)",
+    )
+    parser.add_argument(
+        "--max-offenders",
+        type=int,
+        default=10,
+        help="Max offender rows to display when verification fails (default: 10)",
+    )
+    _add_log_args(parser)
+
+
+def _inject_default_command(argv: list[str]) -> list[str]:
+    if not argv or argv[0].startswith("-"):
+        return ["cluster", *argv]
+    return argv
+
+
+def run_cluster(args: argparse.Namespace) -> None:
     logger = logging.getLogger(__name__)
-
     try:
         # Connect to database
         logger.info("Connecting to MySQL database at %s:%s...", args.host, args.port)
@@ -213,6 +263,35 @@ def main():
         pipeline = create_pipeline(e_dist=args.e_dist, e_days=args.e_days)
         clustered = process_batch(records_df, pipeline, logger)
 
+        if args.redact or args.drop_redacted:
+            if args.drop_redacted:
+                logger.info("Dropping redacted rows using IPT flags...")
+            else:
+                logger.info("Applying IPT redaction rules to clustered output...")
+            config = DatabaseConfig(
+                host=args.host,
+                user=args.user,
+                password=args.password,
+                database=args.database,
+                port=args.port,
+            )
+            flags = fetch_redaction_flags(
+                config,
+                clustered["collectionobjectid"].dropna().unique().tolist(),
+                logger=logger,
+            )
+            total_before_redaction = len(clustered)
+            clustered, redacted_rows = redact_clustered_dataframe(
+                clustered,
+                flags,
+                drop_redacted=args.drop_redacted,
+            )
+            percent = (redacted_rows / total_before_redaction * 100) if total_before_redaction else 0
+            if args.drop_redacted:
+                logger.info("Dropped %d redacted rows (%.2f%% of clustered rows).", redacted_rows, percent)
+            else:
+                logger.info("Redacted %d rows (%.2f%% of clustered rows).", redacted_rows, percent)
+
         # Report results
         num_clusters = clustered["spatiotemporal_cluster_id"].nunique()
         avg_size = len(clustered) / num_clusters
@@ -263,6 +342,113 @@ def main():
     except Exception:
         logger.exception("Error during clustering run")
         sys.exit(1)
+
+
+def run_verify_redaction(args: argparse.Namespace) -> None:
+    logger = logging.getLogger(__name__)
+    try:
+        config = DatabaseConfig(
+            host=args.host,
+            user=args.user,
+            password=args.password,
+            database=args.database,
+            port=args.port,
+        )
+        if args.expect_dropped:
+            result = verify_redacted_csv_drop(
+                args.input,
+                config=config,
+                id_column=args.id_column,
+                logger=logger,
+            )
+            logger.info("Flagged rows present: %d", result.flagged_rows)
+
+            if not result.ok:
+                logger.error("Redaction drop verification failed.")
+                if args.max_offenders > 0 and not result.offenders.empty:
+                    show_columns = [args.id_column]
+                    show_columns.extend(
+                        [
+                            column
+                            for column in (*DEFAULT_LOCALITY_TEXT_COLUMNS, *DEFAULT_COORDINATE_COLUMNS)
+                            if column in result.offenders.columns
+                        ]
+                    )
+                    logger.error(
+                        "Sample offenders (up to %d rows):\n%s",
+                        args.max_offenders,
+                        result.offenders[show_columns].head(args.max_offenders).to_string(index=False),
+                    )
+                sys.exit(2)
+
+            logger.info("\n✓ Redaction drop verification passed.")
+        else:
+            result = verify_redacted_csv(
+                args.input,
+                config=config,
+                id_column=args.id_column,
+                redacted_placeholder=args.redacted_placeholder,
+                logger=logger,
+            )
+            logger.info("Flagged rows: %d", result.flagged_rows)
+            logger.info("Bad locality rows: %d", result.bad_locality_rows)
+            logger.info("Bad coordinate rows: %d", result.bad_coordinate_rows)
+
+            if not result.ok:
+                logger.error("Redaction verification failed.")
+                if args.max_offenders > 0 and not result.offenders.empty:
+                    show_columns = [args.id_column]
+                    show_columns.extend(
+                        [
+                            column
+                            for column in (*DEFAULT_LOCALITY_TEXT_COLUMNS, *DEFAULT_COORDINATE_COLUMNS)
+                            if column in result.offenders.columns
+                        ]
+                    )
+                    logger.error(
+                        "Sample offenders (up to %d rows):\n%s",
+                        args.max_offenders,
+                        result.offenders[show_columns].head(args.max_offenders).to_string(index=False),
+                    )
+                sys.exit(2)
+
+            logger.info("\n✓ Redaction verification passed.")
+
+    except pymysql.Error:
+        logger.exception("Database error. Make sure the database is running: docker-compose up -d")
+        sys.exit(1)
+
+    except Exception:
+        logger.exception("Error during redaction verification")
+        sys.exit(1)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Cluster botanical specimens into expeditions using spatiotemporal DBSCAN"
+    )
+    subparsers = parser.add_subparsers(dest="command")
+
+    cluster_parser = subparsers.add_parser("cluster", help="Run the clustering pipeline")
+    _add_cluster_args(cluster_parser)
+    cluster_parser.set_defaults(command="cluster")
+
+    verify_parser = subparsers.add_parser("verify-redaction", help="Verify redaction on a clustered CSV")
+    _add_verify_args(verify_parser)
+    verify_parser.set_defaults(command="verify-redaction")
+
+    argv = _inject_default_command(sys.argv[1:])
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=getattr(logging, args.log_level),
+        format="%(asctime)s - %(levelname)s - %(message)s",
+    )
+
+    if args.command == "verify-redaction":
+        run_verify_redaction(args)
+    else:
+        run_cluster(args)
 
 
 if __name__ == "__main__":

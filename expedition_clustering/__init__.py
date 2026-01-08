@@ -59,12 +59,25 @@ from .preprocessing import (
     clean_for_clustering,
     merge_core_tables,
 )
+from .redaction import (
+    RedactionDropVerificationResult,
+    RedactionVerificationResult,
+    fetch_redaction_flags,
+    redact_clustered_csv,
+    redact_clustered_dataframe,
+    verify_redacted_csv,
+    verify_redacted_csv_drop,
+    verify_redaction,
+    verify_redaction_drop,
+)
 
 __all__ = [
     "CombineClusters",
     "DatabaseConfig",
     "IterativeSpatiotemporalClustering",
     "Preprocessor",
+    "RedactionDropVerificationResult",
+    "RedactionVerificationResult",
     "SpatialDBSCAN",
     "SpatialReconnectWithinSpatiotemporal",
     "SpatialReconnectWithinTemporal",
@@ -77,6 +90,7 @@ __all__ = [
     "cluster_pipeline_scorer",
     "create_pipeline",
     "custom_cv_search",
+    "fetch_redaction_flags",
     "fetch_table",
     "kfold_analysis",
     "load_core_tables",
@@ -87,6 +101,12 @@ __all__ = [
     "plot_geographical_heatmap_by_day",
     "plot_geographical_positions",
     "plot_time_histogram",
+    "redact_clustered_csv",
+    "redact_clustered_dataframe",
+    "verify_redacted_csv",
+    "verify_redacted_csv_drop",
+    "verify_redaction",
+    "verify_redaction_drop",
 ]
 
 __version__ = "0.1.0"
