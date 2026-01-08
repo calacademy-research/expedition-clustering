@@ -109,6 +109,8 @@ uv run expedition-cluster \
 
 **Output:**
 - `--output PATH` - Output CSV file path (default: data/clustered_expeditions.csv)
+- `--redact` - Apply IPT redaction rules (mask locality text and remove coordinates) before writing output
+- `--drop-redacted` - Drop records flagged for redaction instead of masking fields
 - `--log-level LEVEL` - Logging verbosity: DEBUG, INFO, WARNING, ERROR (default: INFO)
 
 #### Example with common options:
@@ -127,6 +129,29 @@ uv run expedition-cluster \
   --e-days 7 \
   --include-centroids \
   --output data/expeditions_full.csv
+
+# Produce a redacted output suitable for sharing
+uv run expedition-cluster \
+  --e-dist 10 \
+  --e-days 7 \
+  --redact \
+  --output data/clustered_expeditions.csv
+
+# Drop redacted records entirely
+uv run expedition-cluster \
+  --e-dist 10 \
+  --e-days 7 \
+  --drop-redacted \
+  --output data/clustered_expeditions_redacted.csv
+
+# Verify redaction against IPT flags
+uv run expedition-cluster verify-redaction \
+  --input data/clustered_expeditions_redacted.csv
+
+# Verify that redacted records were dropped entirely
+uv run expedition-cluster verify-redaction \
+  --input data/clustered_expeditions_redacted.csv \
+  --expect-dropped
 ```
 
 ### Python API
@@ -151,6 +176,28 @@ pipeline = create_pipeline(e_dist=10, e_days=7)
 clustered = pipeline.fit_transform(clean_df)
 clustered.to_csv("data/clustered_expeditions.csv", index=False)
 print("Expeditions:", clustered["spatiotemporal_cluster_id"].nunique())
+```
+To apply IPT redaction rules on an output CSV:
+```python
+from expedition_clustering import (
+    DatabaseConfig,
+    redact_clustered_csv,
+    verify_redacted_csv,
+    verify_redacted_csv_drop,
+)
+
+config = DatabaseConfig()  # defaults match docker-compose.yml
+redact_clustered_csv("data/clustered_expeditions.csv", config=config)
+redact_clustered_csv(
+    "data/clustered_expeditions.csv",
+    output_path="data/clustered_expeditions_redacted.csv",
+    config=config,
+    drop_redacted=True,
+)
+result = verify_redacted_csv("data/clustered_expeditions_redacted.csv", config=config)
+print("Redaction OK?", result.ok)
+drop_result = verify_redacted_csv_drop("data/clustered_expeditions_redacted.csv", config=config)
+print("Drop Redaction OK?", drop_result.ok)
 ```
 If the clean DataFrame is empty, raise the `limit`, switch `primary_table="collectingevent"`, or set `related_only=False`/`filter_related=False` to include more records.
 
