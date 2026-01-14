@@ -138,5 +138,6 @@ dmypy.json
 vm/vm_passwords.yml
 
 data/*
+!data/clustered_expeditions_redacted.csv
 .DS_Store
 archival/

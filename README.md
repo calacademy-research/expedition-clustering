@@ -109,6 +109,8 @@ uv run expedition-cluster \
 
 **Output:**
 - `--output PATH` - Output CSV file path (default: data/clustered_expeditions.csv)
+- `--redact` - Apply IPT redaction rules (mask locality text and remove coordinates) before writing output
+- `--drop-redacted` - Drop records flagged for redaction instead of masking fields
 - `--log-level LEVEL` - Logging verbosity: DEBUG, INFO, WARNING, ERROR (default: INFO)
 
 #### Example with common options:
@@ -127,6 +129,29 @@ uv run expedition-cluster \
   --e-days 7 \
   --include-centroids \
   --output data/expeditions_full.csv
+
+# Produce a redacted output suitable for sharing
+uv run expedition-cluster \
+  --e-dist 10 \
+  --e-days 7 \
+  --redact \
+  --output data/clustered_expeditions.csv
+
+# Drop redacted records entirely
+uv run expedition-cluster \
+  --e-dist 10 \
+  --e-days 7 \
+  --drop-redacted \
+  --output data/clustered_expeditions_redacted.csv
+
+# Verify redaction against IPT flags
+uv run expedition-cluster verify-redaction \
+  --input data/clustered_expeditions_redacted.csv
+
+# Verify that redacted records were dropped entirely
+uv run expedition-cluster verify-redaction \
+  --input data/clustered_expeditions_redacted.csv \
+  --expect-dropped
 ```
 
 ### Python API
@@ -152,6 +177,28 @@ clustered = pipeline.fit_transform(clean_df)
 clustered.to_csv("data/clustered_expeditions.csv", index=False)
 print("Expeditions:", clustered["spatiotemporal_cluster_id"].nunique())
 ```
+To apply IPT redaction rules on an output CSV:
+```python
+from expedition_clustering import (
+    DatabaseConfig,
+    redact_clustered_csv,
+    verify_redacted_csv,
+    verify_redacted_csv_drop,
+)
+
+config = DatabaseConfig()  # defaults match docker-compose.yml
+redact_clustered_csv("data/clustered_expeditions.csv", config=config)
+redact_clustered_csv(
+    "data/clustered_expeditions.csv",
+    output_path="data/clustered_expeditions_redacted.csv",
+    config=config,
+    drop_redacted=True,
+)
+result = verify_redacted_csv("data/clustered_expeditions_redacted.csv", config=config)
+print("Redaction OK?", result.ok)
+drop_result = verify_redacted_csv_drop("data/clustered_expeditions_redacted.csv", config=config)
+print("Drop Redaction OK?", drop_result.ok)
+```
 If the clean DataFrame is empty, raise the `limit`, switch `primary_table="collectingevent"`, or set `related_only=False`/`filter_related=False` to include more records.
 
 ## Data Workflow
@@ -159,6 +206,27 @@ If the clean DataFrame is empty, raise the `limit`, switch `primary_table="colle
 2. Merge and clean with `build_clean_dataframe`, which normalizes column names, converts dates, and prefers precise locality coordinates over centroids.
 3. Build and run the clustering pipeline via `create_pipeline(e_dist, e_days)`. The output includes spatial, temporal, and combined cluster IDs plus validation to guard against disconnected clusters.
 4. Use plotting helpers or the notebooks for visual QA of spatial and temporal patterns.
+
+## Data
+`data/clustered_expeditions_redacted.csv` is a redacted example output tracked with Git LFS. It contains one row per specimen used for clustering and includes identifiers, event dates, locality fields, coordinates, and cluster assignments.
+
+Key columns:
+- Identifiers: `collectingeventid`, `collectionobjectid`, `localityid`, `geographyid`
+- Event timing: `startdate`, `enddate`
+- Locality + geography: `localityname`, `namedplace`, `latitude1`, `longitude1`, `centroidlat`, `centroidlon`
+- Cluster IDs: `spatial_cluster_id`, `temporal_cluster_id`, `spatiotemporal_cluster_id`
+
+Redaction and provenance:
+- The LFS file was generated with `expedition-cluster --drop-redacted --output data/clustered_expeditions_redacted.csv` against the CAS botany database.
+- If you want masked rows instead of dropping them, regenerate with `--redact`.
+- Pull LFS data with `git lfs pull` after cloning; the full CAS botany dump is not distributed with this repository.
+
+Preview (locality names truncated, coordinates rounded):
+| collectingeventid | collectionobjectid | startdate | localityname | latitude1 | longitude1 | spatiotemporal_cluster_id |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 335013 | 2005-08-17 | Yaduo Cun, NE of Yaping Yakou at the Myanmar border, N si... | 27.2176 | 98.7052 | 0 |
+| 3 | 10675 | 1922-08-10 | Medow W of Gutzman's. | 41.3044 | -121.0368 | 1 |
+| 8 | 36409 | 2006-08-18 | Along N side of Nianwaluo He on the trail from Fucai to C... | 27.9856 | 98.4983 | 2 |
 
 ## Project Structure
 ```
@@ -177,6 +245,7 @@ expedition-clustering/
 ├── pyproject.toml                 # Packaging and tooling configuration
 ├── requirements.txt
 └── data/                          # Local datasets and outputs (git-ignored)
+    └── clustered_expeditions_redacted.csv  # Redacted example output tracked via Git LFS
 ```
 
 ## Development
