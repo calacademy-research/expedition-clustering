@@ -139,5 +139,6 @@ vm/vm_passwords.yml
 
 data/*
 !data/clustered_expeditions_redacted.csv
+!data/README.md
 .DS_Store
 archival/
