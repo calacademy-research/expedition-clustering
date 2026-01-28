@@ -4,23 +4,38 @@ Expedition Clustering - Group botanical specimens into collection expeditions.
 Main functionality:
     create_pipeline: Build a spatiotemporal DBSCAN clustering pipeline
 
+Data sources:
+    Database: DatabaseConfig, fetch_table, load_core_tables
+    CSV: load_collection_csv, list_available_collections
+
 Visualization:
     plot_geographical_positions: Plot specimen locations on a map
     plot_geographical_heatmap: Create density heatmaps
     plot_time_histogram: Show temporal distribution
 
 For advanced usage (notebooks):
-    Database utilities: DatabaseConfig, fetch_table, load_core_tables
     Preprocessing: build_clean_dataframe, clean_for_clustering, merge_core_tables
     Pipeline components: SpatialDBSCAN, TemporalDBSCAN, Preprocessor, CombineClusters
 
-Basic usage:
-    >>> from expedition_clustering import create_pipeline
+Basic usage (database):
+    >>> from expedition_clustering import create_pipeline, DatabaseConfig, load_core_tables
+    >>> config = DatabaseConfig()
+    >>> tables = load_core_tables(config)
+    >>> clean_df = build_clean_dataframe(tables)
     >>> pipeline = create_pipeline(e_dist=10, e_days=7)
-    >>> clustered_df = pipeline.fit_transform(clean_dataframe)
+    >>> clustered_df = pipeline.fit_transform(clean_df)
+
+Basic usage (CSV):
+    >>> from expedition_clustering import create_pipeline, load_collection_csv
+    >>> df = load_collection_csv("/path/to/incoming_data/botany")
+    >>> pipeline = create_pipeline(e_dist=10, e_days=7)
+    >>> clustered_df = pipeline.fit_transform(df)
 """
 
 # Core clustering functionality (most users only need this)
+# CSV data source utilities
+from .csv_source import list_available_collections, load_collection_csv
+
 # Database utilities (for advanced users and notebooks)
 from .data import DatabaseConfig, fetch_table, load_core_tables
 
@@ -93,6 +108,8 @@ __all__ = [
     "fetch_redaction_flags",
     "fetch_table",
     "kfold_analysis",
+    "list_available_collections",
+    "load_collection_csv",
     "load_core_tables",
     "merge_core_tables",
     "partial_ari_with_penalty",

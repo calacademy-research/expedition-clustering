@@ -21,6 +21,7 @@ import pandas as pd
 import pymysql
 
 from expedition_clustering import create_pipeline
+from expedition_clustering.csv_source import list_available_collections, load_collection_csv
 from expedition_clustering.data import DatabaseConfig
 from expedition_clustering.redaction import (
     DEFAULT_COORDINATE_COLUMNS,
@@ -30,6 +31,9 @@ from expedition_clustering.redaction import (
     verify_redacted_csv,
     verify_redacted_csv_drop,
 )
+
+# Default path to incoming_data directory
+DEFAULT_INCOMING_DATA_DIR = Path("/Users/joe/collections_explorer/incoming_data")
 
 
 def process_batch(df_batch, pipeline, logger):
@@ -64,8 +68,37 @@ def _add_log_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_csv_args(parser: argparse.ArgumentParser) -> None:
+    """Add CSV data source arguments."""
+    csv_group = parser.add_argument_group("CSV data source (alternative to database)")
+    csv_group.add_argument(
+        "--csv",
+        type=Path,
+        default=None,
+        help="Path to a CSV file or collection directory (e.g., incoming_data/botany)",
+    )
+    csv_group.add_argument(
+        "--collection",
+        type=str,
+        default=None,
+        help="Collection name to load from incoming_data directory (e.g., botany, ich, iz)",
+    )
+    csv_group.add_argument(
+        "--incoming-data-dir",
+        type=Path,
+        default=DEFAULT_INCOMING_DATA_DIR,
+        help=f"Path to incoming_data directory (default: {DEFAULT_INCOMING_DATA_DIR})",
+    )
+    csv_group.add_argument(
+        "--list-collections",
+        action="store_true",
+        help="List available collections and exit",
+    )
+
+
 def _add_cluster_args(parser: argparse.ArgumentParser) -> None:
     _add_db_args(parser)
+    _add_csv_args(parser)
     parser.add_argument(
         "--e-dist",
         type=float,
@@ -147,94 +180,138 @@ def _inject_default_command(argv: list[str]) -> list[str]:
     return argv
 
 
-def run_cluster(args: argparse.Namespace) -> None:
-    logger = logging.getLogger(__name__)
-    try:
-        # Connect to database
-        logger.info("Connecting to MySQL database at %s:%s...", args.host, args.port)
-        conn = pymysql.connect(
-            host=args.host,
-            user=args.user,
-            password=args.password,
-            database=args.database,
-            port=args.port,
+def _load_from_csv(args: argparse.Namespace, logger: logging.Logger) -> pd.DataFrame:
+    """Load data from CSV source."""
+    # Determine CSV path
+    if args.csv:
+        csv_path = args.csv
+        logger.info("Loading data from CSV: %s", csv_path)
+    elif args.collection:
+        csv_path = args.incoming_data_dir / args.collection
+        logger.info("Loading collection '%s' from %s", args.collection, args.incoming_data_dir)
+    else:
+        raise ValueError("Must specify --csv or --collection for CSV data source")
+
+    # Load and transform CSV data
+    records_df = load_collection_csv(
+        csv_path,
+        limit=args.limit,
+        include_centroids=args.include_centroids,
+        logger=logger,
+    )
+
+    return records_df
+
+
+def _load_from_database(args: argparse.Namespace, logger: logging.Logger) -> pd.DataFrame:
+    """Load data from MySQL database."""
+    logger.info("Connecting to MySQL database at %s:%s...", args.host, args.port)
+    conn = pymysql.connect(
+        host=args.host,
+        user=args.user,
+        password=args.password,
+        database=args.database,
+        port=args.port,
+    )
+
+    # Build query with coordinate filtering based on --include-centroids flag
+    if args.include_centroids:
+        logger.info("Including specimens with geography centroids (may contain inaccurate data)")
+        coord_filter = """
+      AND (l.Latitude1 IS NOT NULL OR g.CentroidLat IS NOT NULL)
+      AND (l.Longitude1 IS NOT NULL OR g.CentroidLon IS NOT NULL)"""
+    else:
+        logger.info("Using only precise locality coordinates (excluding geography centroids)")
+        coord_filter = """
+      AND l.Latitude1 IS NOT NULL
+      AND l.Longitude1 IS NOT NULL"""
+
+    query = f"""  # noqa: S608
+    SELECT
+        ce.CollectingEventID as collectingeventid,
+        ce.StartDate as startdate,
+        ce.EndDate as enddate,
+        ce.Remarks as remarks,
+        ce.LocalityID as localityid,
+        co.CollectionObjectID as collectionobjectid,
+        co.Text1 as text1,
+        l.MinElevation as minelevation,
+        l.MaxElevation as maxelevation,
+        l.ElevationAccuracy as elevationaccuracy,
+        l.Latitude1 as latitude1,
+        l.Longitude1 as longitude1,
+        l.LocalityName as localityname,
+        l.NamedPlace as namedplace,
+        l.GeographyID as geographyid,
+        g.CentroidLat as centroidlat,
+        g.CentroidLon as centroidlon,
+        g.CommonName as commonname,
+        g.FullName as fullname,
+        g.Name as name
+    FROM collectingevent ce
+    INNER JOIN collectionobject co ON ce.CollectingEventID = co.CollectingEventID
+    LEFT JOIN locality l ON ce.LocalityID = l.LocalityID
+    LEFT JOIN geography g ON l.GeographyID = g.GeographyID
+    WHERE ce.StartDate IS NOT NULL{coord_filter}
+    """
+
+    if args.limit:
+        query += f"\nLIMIT {args.limit}"
+        logger.info("Loading up to %d specimens from database...", args.limit)
+    else:
+        logger.info("Loading all specimens from database (this may take a while)...")
+
+    records_df = pd.read_sql_query(query, conn)
+    conn.close()
+
+    logger.info("Loaded %d rows", len(records_df))
+
+    # Normalize column names
+    records_df.columns = records_df.columns.str.lower()
+
+    # Convert dates
+    records_df["startdate"] = pd.to_datetime(records_df["startdate"], errors="coerce")
+    records_df["enddate"] = pd.to_datetime(records_df["enddate"], errors="coerce")
+
+    # Fill in missing precise coordinates with geography centroids (only if --include-centroids)
+    if args.include_centroids:
+        records_df["latitude1"] = records_df["latitude1"].fillna(records_df["centroidlat"])
+        records_df["longitude1"] = records_df["longitude1"].fillna(records_df["centroidlon"])
+        logger.info(
+            "Filled missing coordinates with %d geography centroids",
+            records_df["latitude1"].notna().sum()
+            - (records_df["latitude1"].notna() & records_df["centroidlat"].isna()).sum(),
         )
 
-        # Build query with coordinate filtering based on --include-centroids flag
-        if args.include_centroids:
-            # Include specimens with geography centroids when precise coords are missing
-            logger.info("Including specimens with geography centroids (may contain inaccurate data)")
-            coord_filter = """
-          AND (l.Latitude1 IS NOT NULL OR g.CentroidLat IS NOT NULL)
-          AND (l.Longitude1 IS NOT NULL OR g.CentroidLon IS NOT NULL)"""
+    return records_df
+
+
+def run_cluster(args: argparse.Namespace) -> None:
+    logger = logging.getLogger(__name__)
+
+    # Handle --list-collections
+    if getattr(args, "list_collections", False):
+        collections = list_available_collections(args.incoming_data_dir)
+        if collections:
+            print("Available collections:")
+            for name in collections:
+                print(f"  {name}")
         else:
-            # Default: only use precise locality coordinates
-            logger.info("Using only precise locality coordinates (excluding geography centroids)")
-            coord_filter = """
-          AND l.Latitude1 IS NOT NULL
-          AND l.Longitude1 IS NOT NULL"""
+            print(f"No collections found in {args.incoming_data_dir}")
+        return
 
-        query = f"""  # noqa: S608
-        SELECT
-            ce.CollectingEventID as collectingeventid,
-            ce.StartDate as startdate,
-            ce.EndDate as enddate,
-            ce.Remarks as remarks,
-            ce.LocalityID as localityid,
-            co.CollectionObjectID as collectionobjectid,
-            co.Text1 as text1,
-            l.MinElevation as minelevation,
-            l.MaxElevation as maxelevation,
-            l.ElevationAccuracy as elevationaccuracy,
-            l.Latitude1 as latitude1,
-            l.Longitude1 as longitude1,
-            l.LocalityName as localityname,
-            l.NamedPlace as namedplace,
-            l.GeographyID as geographyid,
-            g.CentroidLat as centroidlat,
-            g.CentroidLon as centroidlon,
-            g.CommonName as commonname,
-            g.FullName as fullname,
-            g.Name as name
-        FROM collectingevent ce
-        INNER JOIN collectionobject co ON ce.CollectingEventID = co.CollectingEventID
-        LEFT JOIN locality l ON ce.LocalityID = l.LocalityID
-        LEFT JOIN geography g ON l.GeographyID = g.GeographyID
-        WHERE ce.StartDate IS NOT NULL{coord_filter}
-        """
+    try:
+        # Determine data source: CSV or database
+        use_csv = args.csv is not None or args.collection is not None
 
-        if args.limit:
-            query += f"\nLIMIT {args.limit}"
-            logger.info("Loading up to %d specimens from database...", args.limit)
+        if use_csv:
+            records_df = _load_from_csv(args, logger)
         else:
-            logger.info("Loading all specimens from database (this may take a while)...")
-
-        # Load data
-        records_df = pd.read_sql_query(query, conn)
-        conn.close()
-
-        logger.info("Loaded %d rows", len(records_df))
+            records_df = _load_from_database(args, logger)
 
         if records_df.empty:
-            logger.error("No data loaded from database!")
+            logger.error("No data loaded!")
             sys.exit(1)
-
-        # Normalize column names
-        records_df.columns = records_df.columns.str.lower()
-
-        # Convert dates
-        records_df["startdate"] = pd.to_datetime(records_df["startdate"], errors="coerce")
-        records_df["enddate"] = pd.to_datetime(records_df["enddate"], errors="coerce")
-
-        # Fill in missing precise coordinates with geography centroids (only if --include-centroids)
-        if args.include_centroids:
-            records_df["latitude1"] = records_df["latitude1"].fillna(records_df["centroidlat"])
-            records_df["longitude1"] = records_df["longitude1"].fillna(records_df["centroidlon"])
-            logger.info(
-                "Filled missing coordinates with %d geography centroids",
-                records_df["latitude1"].notna().sum()
-                - (records_df["latitude1"].notna() & records_df["centroidlat"].isna()).sum(),
-            )
 
         # Drop rows without coordinates or dates
         initial_count = len(records_df)
@@ -264,33 +341,53 @@ def run_cluster(args: argparse.Namespace) -> None:
         clustered = process_batch(records_df, pipeline, logger)
 
         if args.redact or args.drop_redacted:
-            if args.drop_redacted:
-                logger.info("Dropping redacted rows using IPT flags...")
+            if use_csv:
+                logger.warning("Redaction from CSV uses embedded flags only (no database lookup)")
+                # For CSV, we can only use the redaction flags in the CSV itself
+                # Check if redaction columns exist
+                redact_cols = ["yesno2", "co_yesno2", "tx_yesno2"]
+                has_redact_flags = any(col in clustered.columns for col in redact_cols)
+                if has_redact_flags:
+                    # Build is_redacted flag from CSV columns
+                    is_redacted = pd.Series(False, index=clustered.index)
+                    for col in redact_cols:
+                        if col in clustered.columns:
+                            is_redacted |= clustered[col].fillna(0).astype(bool)
+                    flags = clustered[["collectionobjectid"]].copy()
+                    flags["is_redacted"] = is_redacted.astype(int)
+                else:
+                    logger.warning("No redaction flags found in CSV data, skipping redaction")
+                    flags = None
             else:
-                logger.info("Applying IPT redaction rules to clustered output...")
-            config = DatabaseConfig(
-                host=args.host,
-                user=args.user,
-                password=args.password,
-                database=args.database,
-                port=args.port,
-            )
-            flags = fetch_redaction_flags(
-                config,
-                clustered["collectionobjectid"].dropna().unique().tolist(),
-                logger=logger,
-            )
-            total_before_redaction = len(clustered)
-            clustered, redacted_rows = redact_clustered_dataframe(
-                clustered,
-                flags,
-                drop_redacted=args.drop_redacted,
-            )
-            percent = (redacted_rows / total_before_redaction * 100) if total_before_redaction else 0
-            if args.drop_redacted:
-                logger.info("Dropped %d redacted rows (%.2f%% of clustered rows).", redacted_rows, percent)
-            else:
-                logger.info("Redacted %d rows (%.2f%% of clustered rows).", redacted_rows, percent)
+                if args.drop_redacted:
+                    logger.info("Dropping redacted rows using IPT flags...")
+                else:
+                    logger.info("Applying IPT redaction rules to clustered output...")
+                config = DatabaseConfig(
+                    host=args.host,
+                    user=args.user,
+                    password=args.password,
+                    database=args.database,
+                    port=args.port,
+                )
+                flags = fetch_redaction_flags(
+                    config,
+                    clustered["collectionobjectid"].dropna().unique().tolist(),
+                    logger=logger,
+                )
+
+            if flags is not None:
+                total_before_redaction = len(clustered)
+                clustered, redacted_rows = redact_clustered_dataframe(
+                    clustered,
+                    flags,
+                    drop_redacted=args.drop_redacted,
+                )
+                percent = (redacted_rows / total_before_redaction * 100) if total_before_redaction else 0
+                if args.drop_redacted:
+                    logger.info("Dropped %d redacted rows (%.2f%% of clustered rows).", redacted_rows, percent)
+                else:
+                    logger.info("Redacted %d rows (%.2f%% of clustered rows).", redacted_rows, percent)
 
         # Report results
         num_clusters = clustered["spatiotemporal_cluster_id"].nunique()
@@ -327,6 +424,10 @@ def run_cluster(args: argparse.Namespace) -> None:
         logger.info("\n%s", clustered[sample_cols].head(10).to_string(index=False))
 
         logger.info("\n✓ Clustering completed successfully!")
+
+    except FileNotFoundError as e:
+        logger.exception("File not found: %s", e)
+        sys.exit(1)
 
     except pymysql.Error:
         logger.exception("Database error. Make sure the database is running: docker-compose up -d")

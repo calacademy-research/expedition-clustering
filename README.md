@@ -79,7 +79,65 @@ pip install -e .
 
 ## Usage
 
-### Command line
+### CSV Data Source (Recommended)
+
+The `cluster_csv.py` script clusters specimens directly from CSV files exported from the collections portal. This is the simplest way to run clustering without needing a database.
+
+#### Single collection:
+```bash
+python scripts/cluster_csv.py \
+    /path/to/incoming_data/botany \
+    /path/to/incoming_data/botany/clustered_expeditions.csv
+```
+
+#### Multiple collections:
+```bash
+python scripts/cluster_csv.py \
+    /path/to/incoming_data/botany \
+    /path/to/incoming_data/ich \
+    /path/to/incoming_data/iz \
+    -o /path/to/output/combined_clustered.csv
+```
+
+#### All collections at once:
+```bash
+python scripts/cluster_csv.py \
+    --all \
+    -o /path/to/output/all_collections_clustered.csv
+```
+
+#### Options:
+| Flag | Description |
+|------|-------------|
+| `--all` | Process all collections in incoming-data-dir |
+| `-o, --output` | Output file path (required for multi-collection) |
+| `--incoming-data-dir` | Directory containing collections (default: /Users/joe/collections_explorer/incoming_data) |
+| `--limit N` | Limit rows per collection (useful for testing) |
+| `--e-dist KM` | Spatial clustering distance in kilometers (default: 10) |
+| `--e-days DAYS` | Temporal clustering window in days (default: 7) |
+
+#### Supported collections:
+- **botany** - Botanical specimens (1.3M rows)
+- **ich** - Ichthyology (220K rows)
+- **iz** - Invertebrate Zoology (271K rows)
+- **mam** - Mammalogy (39K rows)
+- **orn** - Ornithology (102K rows)
+- **orn-en** - Ornithology Eggs & Nests (11K rows)
+
+When clustering multiple collections, the output identifies cross-collection expeditions:
+
+| Column | Description |
+|--------|-------------|
+| `collection` | Source collection for each specimen |
+| `collections_in_expedition` | All collections in the cluster (e.g., "botany, orn") |
+| `collection_count` | Number of different collections in the cluster |
+| `is_multi_collection` | True if cluster spans multiple collections |
+
+These represent field expeditions where specimens from different disciplines were collected together.
+
+---
+
+### Database Source (Command Line)
 The `expedition-cluster` command runs the full spatiotemporal DBSCAN pipeline directly against your MySQL database. It loads specimen data, applies cleaning and preprocessing, clusters specimens into expeditions, and outputs the results to a CSV file.
 
 #### Basic usage:
@@ -155,6 +213,25 @@ uv run expedition-cluster verify-redaction \
 ```
 
 ### Python API
+
+#### From CSV files:
+```python
+from expedition_clustering import load_collection_csv, create_pipeline
+
+# Load from a collection directory
+df = load_collection_csv("/path/to/incoming_data/botany", limit=5000)
+
+# Filter to valid records
+df = df[df["latitude1"].notna() & df["longitude1"].notna() & df["startdate"].notna()]
+
+# Cluster
+pipeline = create_pipeline(e_dist=10, e_days=7)
+clustered = pipeline.fit_transform(df)
+clustered.to_csv("data/clustered_expeditions.csv", index=False)
+print("Expeditions:", clustered["spatiotemporal_cluster_id"].nunique())
+```
+
+#### From database:
 ```python
 from expedition_clustering import (
     DatabaseConfig,
@@ -233,14 +310,18 @@ Preview (locality names truncated, coordinates rounded):
 expedition-clustering/
 ├── docker-compose.yml             # MySQL/PMA stack (reads credentials/dump path from .env)
 ├── scripts/
+│   ├── cluster_csv.py             # CSV clustering script (recommended entry point)
 │   ├── clean_dump.sh              # Pre-process SQL dumps to remove DEFINER clauses
 │   └── init-db.sh                 # Docker entrypoint script for database initialization
 ├── expedition_clustering/
-│   ├── cli.py                     # expedition-cluster entry point
+│   ├── cli.py                     # expedition-cluster entry point (database source)
+│   ├── csv_source.py              # CSV data loading and transformation
 │   ├── data.py                    # Database connectors and table loaders
 │   ├── pipeline.py                # Spatiotemporal DBSCAN pipeline components
 │   ├── plotting.py                # Mapping and histogram utilities
-│   └── preprocessing.py           # Merge/clean helpers for core tables
+│   ├── preprocessing.py           # Merge/clean helpers for core tables
+│   └── redaction.py               # IPT redaction rules and verification
+├── tests/                         # Unit and integration tests
 ├── notebooks/                     # EDA, manual labeling, and algorithm walkthroughs
 ├── pyproject.toml                 # Packaging and tooling configuration
 ├── requirements.txt
