@@ -35,6 +35,11 @@ _pipeline_module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_pipeline_module)
 create_pipeline = _pipeline_module.create_pipeline
 
+_spec = importlib.util.spec_from_file_location("geo_classify", _pkg_dir / "geo_classify.py")
+_geo_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_geo_module)
+classify_expeditions = _geo_module.classify_expeditions
+
 DEFAULT_INCOMING_DATA_DIR = Path("/Users/joe/collections_explorer/incoming_data")
 
 
@@ -173,6 +178,15 @@ def main():
         )
         clustered["collection_count"] = clustered["spatiotemporal_cluster_id"].map(cluster_collection_counts)
         clustered["is_multi_collection"] = clustered["collection_count"] > 1
+
+    # Add geographic classification to expeditions
+    print("Adding geographic classification...")
+    clustered = classify_expeditions(
+        clustered,
+        cluster_col="spatiotemporal_cluster_id",
+        lat_col="latitude1",
+        lng_col="longitude1",
+    )
 
     # Report results
     num_clusters = clustered["spatiotemporal_cluster_id"].nunique()

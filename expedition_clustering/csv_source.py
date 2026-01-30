@@ -195,6 +195,11 @@ def transform_csv_to_pipeline_format(
     result["commonname"] = df.get("County", "")
     result["fullname"] = _build_fullname(df)
     result["name"] = df.get("State", "")
+    result["country"] = df.get("Country", "")
+    result["continent"] = df.get("Continent", "")
+
+    # Collectors - needed for expedition summaries (Bug #5 fix)
+    result["collectors"] = df.get("collectors", "")
 
     # Placeholder for geographyid and localityid (not available in CSV)
     result["geographyid"] = pd.NA
@@ -230,9 +235,21 @@ def _build_datetime(
     day_col: str,
 ) -> pd.Series:
     """Build datetime from separate year/month/day columns."""
-    years = pd.to_numeric(df.get(year_col), errors="coerce")
-    months = pd.to_numeric(df.get(month_col), errors="coerce").fillna(1).astype(int)
-    days = pd.to_numeric(df.get(day_col), errors="coerce").fillna(1).astype(int)
+    # Handle missing columns by creating Series of NaN/default values
+    if year_col in df.columns:
+        years = pd.to_numeric(df[year_col], errors="coerce")
+    else:
+        years = pd.Series(pd.NA, index=df.index)
+
+    if month_col in df.columns:
+        months = pd.to_numeric(df[month_col], errors="coerce").fillna(1).astype(int)
+    else:
+        months = pd.Series(1, index=df.index)
+
+    if day_col in df.columns:
+        days = pd.to_numeric(df[day_col], errors="coerce").fillna(1).astype(int)
+    else:
+        days = pd.Series(1, index=df.index)
 
     # Clamp values to valid ranges
     months = months.clip(1, 12)
