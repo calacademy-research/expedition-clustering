@@ -193,14 +193,12 @@ def _load_from_csv(args: argparse.Namespace, logger: logging.Logger) -> pd.DataF
         raise ValueError("Must specify --csv or --collection for CSV data source")
 
     # Load and transform CSV data
-    records_df = load_collection_csv(
+    return load_collection_csv(
         csv_path,
         limit=args.limit,
         include_centroids=args.include_centroids,
         logger=logger,
     )
-
-    return records_df
 
 
 def _load_from_database(args: argparse.Namespace, logger: logging.Logger) -> pd.DataFrame:
@@ -304,10 +302,7 @@ def run_cluster(args: argparse.Namespace) -> None:
         # Determine data source: CSV or database
         use_csv = args.csv is not None or args.collection is not None
 
-        if use_csv:
-            records_df = _load_from_csv(args, logger)
-        else:
-            records_df = _load_from_database(args, logger)
+        records_df = _load_from_csv(args, logger) if use_csv else _load_from_database(args, logger)
 
         if records_df.empty:
             logger.error("No data loaded!")
@@ -349,7 +344,7 @@ def run_cluster(args: argparse.Namespace) -> None:
                 has_redact_flags = any(col in clustered.columns for col in redact_cols)
                 if has_redact_flags:
                     # Build is_redacted flag from CSV columns
-                    is_redacted = pd.Series(False, index=clustered.index)
+                    is_redacted = pd.Series(data=False, index=clustered.index)
                     for col in redact_cols:
                         if col in clustered.columns:
                             is_redacted |= clustered[col].fillna(0).astype(bool)
@@ -425,8 +420,8 @@ def run_cluster(args: argparse.Namespace) -> None:
 
         logger.info("\n✓ Clustering completed successfully!")
 
-    except FileNotFoundError as e:
-        logger.exception("File not found: %s", e)
+    except FileNotFoundError:
+        logger.exception("File not found")
         sys.exit(1)
 
     except pymysql.Error:

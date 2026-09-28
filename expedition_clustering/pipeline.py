@@ -4,7 +4,6 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -13,6 +12,15 @@ from sklearn.cluster import DBSCAN
 from sklearn.metrics import adjusted_rand_score, make_scorer
 from sklearn.model_selection import GridSearchCV, KFold, ParameterGrid
 from sklearn.pipeline import Pipeline
+
+logger = logging.getLogger(__name__)
+
+# A collector string shorter than this is noise (a stray initial or symbol).
+MIN_COLLECTOR_NAME_LEN = 2
+# A "Last" part with more words than this is an institution, not a surname.
+MAX_LAST_NAME_WORDS = 3
+# Two dated specimens are the fewest that have a gap between them.
+MIN_DATES_FOR_GAP = 2
 
 
 def normalize_collector_name(name: str) -> str:
@@ -29,9 +37,10 @@ def normalize_collector_name(name: str) -> str:
 
     Returns:
         Lowercase, ASCII-only, punctuation-removed name
+
     """
-    if pd.isna(name) or str(name).strip() == '' or str(name).lower() == 'unknown':
-        return 'unknown'
+    if pd.isna(name) or str(name).strip() == "" or str(name).lower() == "unknown":
+        return "unknown"
 
     name = str(name).strip()
 
@@ -49,20 +58,20 @@ def normalize_collector_name(name: str) -> str:
     # Collapse whitespace
     name = re.sub(r"\s+", " ", name).strip()
 
-    return name if name else 'unknown'
+    return name if name else "unknown"
 
 
 # Patterns to filter out (not collector names)
 COLLECTOR_IGNORE_PATTERNS = [
-    re.compile(r'^et\s*al\.?$', re.IGNORECASE),
-    re.compile(r'^al\.?$', re.IGNORECASE),
-    re.compile(r'^others?$', re.IGNORECASE),
-    re.compile(r'^party$', re.IGNORECASE),
-    re.compile(r'^crew$', re.IGNORECASE),
-    re.compile(r'^staff$', re.IGNORECASE),
-    re.compile(r'^\d+$'),  # Just numbers
-    re.compile(r'^[A-Z]$'),  # Single letters
-    re.compile(r'^[IVX]+$'),  # Roman numerals
+    re.compile(r"^et\s*al\.?$", re.IGNORECASE),
+    re.compile(r"^al\.?$", re.IGNORECASE),
+    re.compile(r"^others?$", re.IGNORECASE),
+    re.compile(r"^party$", re.IGNORECASE),
+    re.compile(r"^crew$", re.IGNORECASE),
+    re.compile(r"^staff$", re.IGNORECASE),
+    re.compile(r"^\d+$"),  # Just numbers
+    re.compile(r"^[A-Z]$"),  # Single letters
+    re.compile(r"^[IVX]+$"),  # Roman numerals
 ]
 
 
@@ -70,12 +79,10 @@ def _is_initials_or_short_name(s: str) -> bool:
     """Check if string looks like initials (e.g., 'R. H.') or a short first name."""
     s = s.strip()
     # Initials pattern: one or more "X." or "X. X." etc.
-    if re.match(r'^([A-Z]\.?\s*)+$', s):
+    if re.match(r"^([A-Z]\.?\s*)+$", s):
         return True
     # Short first name (1-3 letters, possibly with period)
-    if re.match(r'^[A-Z][a-z]?\.?$', s):
-        return True
-    return False
+    return bool(re.match(r"^[A-Z][a-z]?\.?$", s))
 
 
 def _looks_like_last_first_format(s: str) -> bool:
@@ -94,26 +101,23 @@ def _looks_like_last_first_format(s: str) -> bool:
     - "Smith, Jones, Brown" (multiple people)
     - "CAS Invert. Zool. Dept." (institution)
     """
-    if ',' not in s:
+    if "," not in s:
         return False
 
-    parts = s.split(',', 1)  # Split on first comma only
-    if len(parts) != 2:
-        return False
-
-    last, first = parts[0].strip(), parts[1].strip()
+    # Split on the first comma only; the check above guarantees there is one.
+    last, first = (part.strip() for part in s.split(",", 1))
 
     # Remove trailing question mark (uncertain attribution)
-    first = first.rstrip('?').strip()
-    last = last.rstrip('?').strip()
+    first = first.rstrip("?").strip()
+    last = last.rstrip("?").strip()
 
     # Last name: single word or multi-word (Van Huizen, De Silva, etc.)
     # Must start with capital, can have spaces/hyphens, no periods
-    if not re.match(r'^[A-Z][A-Za-z\-\'\s]+$', last):
+    if not re.match(r"^[A-Z][A-Za-z\-\'\s]+$", last):
         return False
 
     # But reject if last name has too many words (likely institution)
-    if len(last.split()) > 3:
+    if len(last.split()) > MAX_LAST_NAME_WORDS:
         return False
 
     # First should be initials, short name, or a first name
@@ -122,10 +126,7 @@ def _looks_like_last_first_format(s: str) -> bool:
         return True
 
     # Check if it's a first name (capitalized word, possibly with middle initial)
-    if re.match(r'^[A-Z][a-z]+(\s+[A-Z]\.?)?$', first):
-        return True
-
-    return False
+    return bool(re.match(r"^[A-Z][a-z]+(\s+[A-Z]\.?)?$", first))
 
 
 def parse_collector_string(collector_str: str) -> list[str]:
@@ -149,8 +150,9 @@ def parse_collector_string(collector_str: str) -> list[str]:
 
     Returns:
         List of individual collector names
+
     """
-    if pd.isna(collector_str) or str(collector_str).strip() == '':
+    if pd.isna(collector_str) or str(collector_str).strip() == "":
         return []
 
     collector_str = str(collector_str).strip()
@@ -158,17 +160,17 @@ def parse_collector_string(collector_str: str) -> list[str]:
     # Remove vessel information (e.g., "aboard R/V Searcher")
     collector_str = re.sub(
         r'\s+aboard\s+(?:the\s+)?(?:R/V|PFS|RV|M/V|S/V|USCGC|HMS|RRS)?\s*["\']?[^"\']+["\']?\s*$',
-        '',
+        "",
         collector_str,
         flags=re.IGNORECASE
     )
 
     # First, split on semicolon (always a person separator)
-    semicolon_parts = collector_str.split(';')
+    semicolon_parts = collector_str.split(";")
 
     collectors = []
-    for part in semicolon_parts:
-        part = part.strip()
+    for raw_part in semicolon_parts:
+        part = raw_part.strip()
         if not part:
             continue
 
@@ -179,33 +181,34 @@ def parse_collector_string(collector_str: str) -> list[str]:
 
         # Otherwise, split on other separators: &, "and", "with", comma
         # But be careful with commas - only split if not "Last, First"
-        subparts = re.split(r'\s*&\s*|\s+and\s+|\s+with\s+|\s+et\s+|\s+y\s+', part, flags=re.IGNORECASE)
+        subparts = re.split(r"\s*&\s*|\s+and\s+|\s+with\s+|\s+et\s+|\s+y\s+", part, flags=re.IGNORECASE)
 
-        for subpart in subparts:
-            subpart = subpart.strip()
+        for raw_subpart in subparts:
+            subpart = raw_subpart.strip()
 
             # Handle comma-separated within this subpart
             # Only split on comma if it doesn't look like "Last, First"
-            if ',' in subpart and not _looks_like_last_first_format(subpart):
-                comma_parts = subpart.split(',')
-                for cp in comma_parts:
-                    cp = cp.strip()
-                    if cp and len(cp) >= 2:
-                        if not any(p.match(cp) for p in COLLECTOR_IGNORE_PATTERNS):
-                            collectors.append(cp)
-            elif subpart and len(subpart) >= 2:
+            if "," in subpart and not _looks_like_last_first_format(subpart):
+                comma_parts = subpart.split(",")
+                for raw_cp in comma_parts:
+                    cp = raw_cp.strip()
+                    if (
+                        cp
+                        and len(cp) >= MIN_COLLECTOR_NAME_LEN
+                        and not any(p.match(cp) for p in COLLECTOR_IGNORE_PATTERNS)
+                    ):
+                        collectors.append(cp)
+            elif subpart and len(subpart) >= MIN_COLLECTOR_NAME_LEN:
                 if not any(p.match(subpart) for p in COLLECTOR_IGNORE_PATTERNS):
                     collectors.append(subpart)
 
     # Clean up whitespace in all collectors
-    collectors = [re.sub(r'\s+', ' ', c).strip() for c in collectors]
-
-    return collectors
+    return [re.sub(r"\s+", " ", c).strip() for c in collectors]
 
 
 def create_collector_group_key(
     collector_str: str,
-    aliases: Optional[dict[str, str]] = None
+    aliases: dict[str, str] | None = None
 ) -> str:
     """
     Create a canonical key for a collector group.
@@ -226,11 +229,12 @@ def create_collector_group_key(
 
     Returns:
         Canonical collector group key (e.g., "lockhart s+mooi r")
+
     """
     collectors = parse_collector_string(collector_str)
 
     if not collectors:
-        return 'unknown'
+        return "unknown"
 
     # Normalize each collector
     normalized = []
@@ -243,7 +247,7 @@ def create_collector_group_key(
 
     # Sort and join to create canonical key
     normalized.sort()
-    return '+'.join(normalized)
+    return "+".join(normalized)
 
 
 def extract_primary_collector(s):
@@ -260,11 +264,11 @@ def extract_primary_collector(s):
     Note: For clustering, prefer create_collector_group_key() which handles
     multi-collector strings properly.
     """
-    if pd.isna(s) or str(s).strip() == '' or str(s).lower() == 'unknown':
-        return 'unknown'
+    if pd.isna(s) or str(s).strip() == "" or str(s).lower() == "unknown":
+        return "unknown"
     s = str(s).strip()
     # Split on semicolon first (separates collector groups in some formats)
-    parts = s.split(';')
+    parts = s.split(";")
     return parts[0].strip()
 
 
@@ -280,16 +284,17 @@ def load_collector_aliases(alias_file: Path) -> dict[str, str]:
 
     Returns:
         Dict mapping normalized names to canonical IDs
+
     """
     if not alias_file.exists():
         return {}
 
     df = pd.read_csv(alias_file)
-    if 'normalized_name' not in df.columns or 'canonical_id' not in df.columns:
-        logging.warning(f"Alias file {alias_file} missing required columns")
+    if "normalized_name" not in df.columns or "canonical_id" not in df.columns:
+        logger.warning("Alias file %s missing required columns", alias_file)
         return {}
 
-    return dict(zip(df['normalized_name'], df['canonical_id'].astype(str)))
+    return dict(zip(df["normalized_name"], df["canonical_id"].astype(str), strict=True))
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -310,20 +315,20 @@ _VESSEL_PATTERN = re.compile(
 )
 
 
-def extract_vessel(collector_str: str) -> Optional[str]:
+def extract_vessel(collector_str: str) -> str | None:
     """Extract vessel name from a collector string, if present."""
     if pd.isna(collector_str) or not str(collector_str).strip():
         return None
     match = _VESSEL_PATTERN.search(str(collector_str))
     if match:
-        return match.group(1).strip().rstrip('.')
+        return match.group(1).strip().rstrip(".")
     return None
 
 
 def measure_collector_coherence(
     df: pd.DataFrame,
-    cluster_col: str = 'spatiotemporal_cluster_id',
-    collector_col: str = 'collectors',
+    cluster_col: str = "spatiotemporal_cluster_id",
+    collector_col: str = "collectors",
 ) -> float:
     """
     Measure what fraction of expeditions have a single primary collector.
@@ -344,7 +349,7 @@ def measure_collector_coherence(
             parsed = parse_collector_string(str(raw))
             for c in parsed:
                 collectors.add(normalize_collector_name(c))
-        collectors.discard('unknown')
+        collectors.discard("unknown")
         if len(collectors) <= 1:
             single_collector += 1
 
@@ -354,6 +359,7 @@ def measure_collector_coherence(
 @dataclass
 class _ExpeditionSummary:
     """Summary statistics for an expedition used in merge scoring."""
+
     expedition_id: int
     specimen_count: int
     start_date: pd.Timestamp
@@ -361,13 +367,14 @@ class _ExpeditionSummary:
     centroid_lat: float
     centroid_lon: float
     collectors: set
-    vessel: Optional[str]
+    vessel: str | None
     year: int
 
 
 @dataclass
 class _MergeCandidate:
     """A candidate pair of expeditions for merging."""
+
     exp_a: _ExpeditionSummary
     exp_b: _ExpeditionSummary
     gap_days: int
@@ -378,25 +385,25 @@ class _MergeCandidate:
 def _build_expedition_summary(
     expedition_id: int,
     group: pd.DataFrame,
-    collector_col: str = 'collectors',
+    collector_col: str = "collectors",
 ) -> _ExpeditionSummary:
     """Build summary statistics for a single expedition."""
-    dates = pd.to_datetime(group['startdate']).dropna()
+    dates = pd.to_datetime(group["startdate"]).dropna()
     start = dates.min()
     end = dates.max()
 
-    centroid_lat = group['latitude1'].astype(float).mean()
-    centroid_lon = group['longitude1'].astype(float).mean()
+    centroid_lat = group["latitude1"].astype(float).mean()
+    centroid_lon = group["longitude1"].astype(float).mean()
 
     collectors = set()
     vessel = None
     if collector_col in group.columns:
-        for raw in group[collector_col].dropna():
-            raw = str(raw)
+        for raw_value in group[collector_col].dropna():
+            raw = str(raw_value)
             parsed = parse_collector_string(raw)
             for c in parsed:
                 norm = normalize_collector_name(c)
-                if norm != 'unknown':
+                if norm != "unknown":
                     collectors.add(norm)
             if vessel is None:
                 vessel = extract_vessel(raw)
@@ -547,14 +554,15 @@ class CollectorPartitioning(BaseEstimator, TransformerMixin):
     alias_file : Optional[Path]
         Path to a CSV file with collector alias mappings (normalized_name -> canonical_id).
         If provided, disambiguated collector IDs are used instead of normalized names.
+
     """
 
     def __init__(
         self,
         enabled=False,
-        collector_col='collectors',
+        collector_col="collectors",
         include_year=True,
-        alias_file: Optional[Path] = None
+        alias_file: Path | None = None
     ):
         self.enabled = enabled
         self.collector_col = collector_col
@@ -567,7 +575,7 @@ class CollectorPartitioning(BaseEstimator, TransformerMixin):
         if self.alias_file:
             self._aliases = load_collector_aliases(Path(self.alias_file))
             if self._aliases:
-                logging.info(f"Loaded {len(self._aliases)} collector aliases")
+                logger.info("Loaded %d collector aliases", len(self._aliases))
         return self
 
     def _resolve_collector_group(self, raw_name: str) -> str:
@@ -589,32 +597,30 @@ class CollectorPartitioning(BaseEstimator, TransformerMixin):
 
         if not self.enabled:
             # All specimens in same partition - standard behavior
-            X['collector_partition'] = 0
+            X["collector_partition"] = 0
             return X
 
         # Extract primary collector (for display) and collector group key (for clustering)
         if self.collector_col in X.columns:
-            X['primary_collector'] = X[self.collector_col].apply(extract_primary_collector)
+            X["primary_collector"] = X[self.collector_col].apply(extract_primary_collector)
             # Use collector GROUP key for partitioning (handles multi-collector properly)
-            X['collector_group'] = X[self.collector_col].apply(self._resolve_collector_group)
+            X["collector_group"] = X[self.collector_col].apply(self._resolve_collector_group)
         else:
-            X['primary_collector'] = 'unknown'
-            X['collector_group'] = 'unknown'
+            X["primary_collector"] = "unknown"
+            X["collector_group"] = "unknown"
 
         # Build partition key using collector group
-        if self.include_year and 'startdate' in X.columns:
-            X['_year'] = pd.to_datetime(X['startdate']).dt.year.fillna(0).astype(int)
-            X['_partition_key'] = X['collector_group'] + '_' + X['_year'].astype(str)
-            X = X.drop(columns=['_year'])
+        if self.include_year and "startdate" in X.columns:
+            X["_year"] = pd.to_datetime(X["startdate"]).dt.year.fillna(0).astype(int)
+            X["_partition_key"] = X["collector_group"] + "_" + X["_year"].astype(str)
+            X = X.drop(columns=["_year"])
         else:
-            X['_partition_key'] = X['collector_group']
+            X["_partition_key"] = X["collector_group"]
 
         # Convert to integer partition IDs
-        partition_map = {k: i for i, k in enumerate(X['_partition_key'].unique())}
-        X['collector_partition'] = X['_partition_key'].map(partition_map)
-        X = X.drop(columns=['_partition_key'])
-
-        return X
+        partition_map = {k: i for i, k in enumerate(X["_partition_key"].unique())}
+        X["collector_partition"] = X["_partition_key"].map(partition_map)
+        return X.drop(columns=["_partition_key"])
 
 
 # Step 2: Custom Transformer for Spatial DBSCAN Clustering
@@ -641,13 +647,13 @@ class SpatialDBSCAN(BaseEstimator, TransformerMixin):
         eps_rad = self.e_dist / 6371  # Convert e_dist to radians
 
         # Check if we have collector partitions
-        if 'collector_partition' in X.columns and X['collector_partition'].nunique() > 1:
+        if "collector_partition" in X.columns and len(X["collector_partition"].dropna().unique()) > 1:
             # Cluster within each partition, ensuring unique IDs across partitions
-            X['spatial_cluster_id'] = -1
+            X["spatial_cluster_id"] = -1
             next_cluster_id = 0
 
-            for partition_id in X['collector_partition'].unique():
-                mask = X['collector_partition'] == partition_id
+            for partition_id in X["collector_partition"].unique():
+                mask = X["collector_partition"] == partition_id
                 partition_data = X.loc[mask]
 
                 if len(partition_data) == 0:
@@ -664,7 +670,7 @@ class SpatialDBSCAN(BaseEstimator, TransformerMixin):
                 labels = db.fit_predict(coords)
 
                 # Offset labels to ensure uniqueness across partitions
-                X.loc[mask, 'spatial_cluster_id'] = labels + next_cluster_id
+                X.loc[mask, "spatial_cluster_id"] = labels + next_cluster_id
                 next_cluster_id += labels.max() + 1
         else:
             # Standard behavior - cluster all together
@@ -1099,7 +1105,7 @@ class MergeExpeditions(BaseEstimator, TransformerMixin):
         X = X.copy()
         logger = logging.getLogger(__name__)
 
-        if 'spatiotemporal_cluster_id' not in X.columns:
+        if "spatiotemporal_cluster_id" not in X.columns:
             return X
 
         # Measure collection-wide collector coherence once
@@ -1111,7 +1117,7 @@ class MergeExpeditions(BaseEstimator, TransformerMixin):
         for iteration in range(1, self.max_iterations + 1):
             # Build summaries for all current expeditions
             summaries = {}
-            for exp_id, group in X.groupby('spatiotemporal_cluster_id'):
+            for exp_id, group in X.groupby("spatiotemporal_cluster_id"):
                 summaries[exp_id] = _build_expedition_summary(exp_id, group)
 
             # Find and score merge candidates
@@ -1144,8 +1150,8 @@ class MergeExpeditions(BaseEstimator, TransformerMixin):
 
                 # Execute: reassign B's specimens to A's cluster
                 X.loc[
-                    X['spatiotemporal_cluster_id'] == b_id,
-                    'spatiotemporal_cluster_id'
+                    X["spatiotemporal_cluster_id"] == b_id,
+                    "spatiotemporal_cluster_id"
                 ] = a_id
 
                 merged_this_round.add(a_id)
@@ -1231,11 +1237,11 @@ class MergeExpeditions(BaseEstimator, TransformerMixin):
         a_id = candidate.exp_a.expedition_id
         b_id = candidate.exp_b.expedition_id
 
-        mask = df['spatiotemporal_cluster_id'].isin([a_id, b_id])
+        mask = df["spatiotemporal_cluster_id"].isin([a_id, b_id])
         combined = df.loc[mask]
 
-        dates = pd.to_datetime(combined['startdate']).dropna().sort_values()
-        if len(dates) < 2:
+        dates = pd.to_datetime(combined["startdate"]).dropna().sort_values()
+        if len(dates) < MIN_DATES_FOR_GAP:
             return True
 
         # Use vessel-aware gap threshold
@@ -1243,7 +1249,7 @@ class MergeExpeditions(BaseEstimator, TransformerMixin):
         gap_threshold = self.max_gap_days * 2 if has_vessel else self.max_gap_days
 
         # Check all consecutive date gaps
-        day_values = dates.values.astype('datetime64[D]').astype(float)
+        day_values = dates.values.astype("datetime64[D]").astype(float)
         gaps = np.diff(day_values)
         max_internal_gap = gaps.max() if len(gaps) > 0 else 0
 
@@ -1298,7 +1304,7 @@ def create_pipeline(
     e_days,
     collector_aware=False,
     include_year_in_partition=True,
-    collector_alias_file: Optional[Path] = None,
+    collector_alias_file: Path | None = None,
     merge_gap_days: int = 3,
     merge_distance_km: float = 30.0,
     merge_threshold: float = 0.6,
@@ -1332,6 +1338,7 @@ def create_pipeline(
     -------
     Pipeline
         Configured sklearn Pipeline for expedition clustering.
+
     """
     steps = [
         ("preprocessor", Preprocessor()),

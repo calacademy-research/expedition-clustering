@@ -62,6 +62,7 @@ def load_csv_data(
     -------
     pd.DataFrame
         DataFrame with columns mapped to the expected pipeline schema.
+
     """
     csv_path = Path(csv_path)
 
@@ -87,6 +88,7 @@ def _detect_date_format(df: pd.DataFrame, date_col: str) -> str:
     str
         'iso' if dates are ISO strings like '2007-06-20'
         'components' if dates are year integers with separate month/day columns
+
     """
     if date_col not in df.columns:
         return "components"
@@ -136,6 +138,7 @@ def transform_csv_to_pipeline_format(
     -------
     pd.DataFrame
         Transformed DataFrame ready for the clustering pipeline.
+
     """
     result = pd.DataFrame()
 
@@ -236,10 +239,7 @@ def _build_datetime(
 ) -> pd.Series:
     """Build datetime from separate year/month/day columns."""
     # Handle missing columns by creating Series of NaN/default values
-    if year_col in df.columns:
-        years = pd.to_numeric(df[year_col], errors="coerce")
-    else:
-        years = pd.Series(pd.NA, index=df.index)
+    years = pd.to_numeric(df[year_col], errors="coerce") if year_col in df.columns else pd.Series(pd.NA, index=df.index)
 
     if month_col in df.columns:
         months = pd.to_numeric(df[month_col], errors="coerce").fillna(1).astype(int)
@@ -272,10 +272,7 @@ def _build_datetime(
 
 def _build_fullname(df: pd.DataFrame) -> pd.Series:
     """Build full geographic name from hierarchy columns."""
-    parts = []
-    for col in ["Continent", "Country", "State", "County"]:
-        if col in df.columns:
-            parts.append(df[col].fillna(""))
+    parts = [df[col].fillna("") for col in ["Continent", "Country", "State", "County"] if col in df.columns]
 
     if not parts:
         return pd.Series("", index=df.index)
@@ -289,9 +286,7 @@ def _build_fullname(df: pd.DataFrame) -> pd.Series:
     # Clean up multiple commas from empty values
     result = result.str.replace(r",\s*,", ",", regex=True)
     result = result.str.replace(r"^,\s*", "", regex=True)
-    result = result.str.replace(r",\s*$", "", regex=True)
-
-    return result
+    return result.str.replace(r",\s*$", "", regex=True)
 
 
 def load_collection_csv(
@@ -321,6 +316,7 @@ def load_collection_csv(
     -------
     pd.DataFrame
         DataFrame ready for the clustering pipeline.
+
     """
     collection_path = Path(collection_path)
 
@@ -359,12 +355,9 @@ def list_available_collections(incoming_data_path: Path | str) -> list[str]:
     -------
     list[str]
         List of collection names that have PortalData.csv files.
+
     """
     incoming_data_path = Path(incoming_data_path)
-    collections = []
-
-    for item in incoming_data_path.iterdir():
-        if item.is_dir() and (item / "PortalData.csv").exists():
-            collections.append(item.name)
-
-    return sorted(collections)
+    return sorted(
+        item.name for item in incoming_data_path.iterdir() if item.is_dir() and (item / "PortalData.csv").exists()
+    )

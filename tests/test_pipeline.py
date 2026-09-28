@@ -103,7 +103,7 @@ def test_merge_combines_nearby_clusters():
         max_gap_days=5,
     )
     result = merger.transform(df)
-    assert result["spatiotemporal_cluster_id"].nunique() == 1
+    assert len(result["spatiotemporal_cluster_id"].dropna().unique()) == 1
 
 
 def test_merge_does_not_merge_distant_clusters():

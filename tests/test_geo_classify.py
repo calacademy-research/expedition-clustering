@@ -13,48 +13,45 @@ Tests geographic classification functions for:
 - Coral reefs and mangroves
 """
 
-import numpy as np
 import pandas as pd
-import pytest
 
 from expedition_clustering.geo_classify import (
+    DESERT_REGIONS,
+    ISLAND_GROUPS,
+    MOUNTAIN_RANGES,
+    # Constants
+    NAMED_REGIONS,
+    RAINFOREST_REGIONS,
+    TAIGA_REGIONS,
+    TUNDRA_REGIONS,
+    _get_treeline_elevation,
+    _is_desert_region,
+    _is_mediterranean_region,
+    _is_steppe_region,
+    # Helper functions
+    _point_in_bounds,
+    _point_in_region_bounds,
     # Main functions
     classify_coordinates,
     classify_dataframe,
     classify_expeditions,
+    get_biogeographic_realm,
+    # Biome functions
+    get_biome,
     # Elevation functions
     get_elevation_band,
-    is_high_altitude,
-    is_above_treeline,
-    _get_treeline_elevation,
     # Climate functions
     get_koppen_zone,
     get_latitude_band,
-    # Biome functions
-    get_biome,
-    get_biogeographic_realm,
+    get_mountain_range,
+    get_specific_desert,
+    is_above_treeline,
+    is_coral_reef_region,
+    is_high_altitude,
     # Feature detection
     is_island_location,
-    get_mountain_range,
-    is_coral_reef_region,
     is_mangrove_region,
-    get_specific_desert,
-    # Helper functions
-    _point_in_bounds,
-    _point_in_region_bounds,
-    _is_desert_region,
-    _is_steppe_region,
-    _is_mediterranean_region,
-    # Constants
-    NAMED_REGIONS,
-    ISLAND_GROUPS,
-    DESERT_REGIONS,
-    RAINFOREST_REGIONS,
-    TAIGA_REGIONS,
-    TUNDRA_REGIONS,
-    MOUNTAIN_RANGES,
 )
-
 
 # ============================================================================
 # Test Named Regions
@@ -140,8 +137,8 @@ class TestNamedRegions:
         """Point not in any named region."""
         # Middle of nowhere in North America
         result = classify_coordinates(45.0, -90.0)
-        # Might be in a general region or None
-        # Just verify it doesn't crash
+        # Might be in a general region or None; it must not crash and must answer
+        assert "region" in result
 
 
 # ============================================================================
@@ -286,7 +283,7 @@ class TestKoppenZones:
     def test_tropical(self):
         """Tropical climate detection."""
         # Amazon
-        code, name = get_koppen_zone(-3, -60)
+        _code, name = get_koppen_zone(-3, -60)
         assert name == "Tropical"
 
     def test_desert(self):
@@ -914,6 +911,7 @@ class TestEdgeCases:
         # Fiji is at ~178°E to ~-178°W
         result = classify_coordinates(-17, 179)
         # Should still classify correctly
+        assert "region" in result
 
 
 # ============================================================================
@@ -927,7 +925,7 @@ class TestDataIntegrity:
         """All named regions have valid 4-tuple bounds."""
         for name, bounds in NAMED_REGIONS.items():
             assert len(bounds) == 4, f"{name} has invalid bounds"
-            min_lat, max_lat, min_lng, max_lng = bounds
+            min_lat, max_lat, _min_lng, _max_lng = bounds
             assert min_lat < max_lat, f"{name} has invalid latitude bounds"
 
     def test_all_island_groups_reference_valid_regions(self):

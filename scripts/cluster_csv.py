@@ -46,8 +46,8 @@ DEFAULT_INCOMING_DATA_DIR = Path("/Users/joe/collections_explorer/incoming_data"
 # Initial DBSCAN spatial epsilon - kept tight, merge stage handles broader reach.
 # Based on tuning results from collections_explorer (384 param combos per collection).
 COLLECTION_E_DIST = {
-    'ich': 15.0,   # Fish expeditions have clean patterns, 15km is optimal
-    'orn': 15.0,   # Was 100km; merge stage now handles island hopping at 15km
+    "ich": 15.0,   # Fish expeditions have clean patterns, 15km is optimal
+    "orn": 15.0,   # Was 100km; merge stage now handles island hopping at 15km
 }
 DEFAULT_E_DIST = 10.0
 
@@ -55,10 +55,10 @@ DEFAULT_E_DIST = 10.0
 # Initial DBSCAN temporal epsilon - tight initial clusters, merge handles reconnection.
 # Tuning showed max_gap_days=2-3 is optimal for most collections.
 COLLECTION_E_DAYS = {
-    'orn': 2.0,        # Was 60; tuning: 2 (collector-aware prevents chaining)
-    'iz': 3.0,         # Was 7; tuning: 3
-    'mam': 5.0,        # Tuning: 5 (trap checking has multi-day gaps)
-    'ent_types': 4.0,  # Tuning: 4
+    "orn": 2.0,        # Was 60; tuning: 2 (collector-aware prevents chaining)
+    "iz": 3.0,         # Was 7; tuning: 3
+    "mam": 5.0,        # Tuning: 5 (trap checking has multi-day gaps)
+    "ent_types": 4.0,  # Tuning: 4
 }
 DEFAULT_E_DAYS = 3.0   # Was 14; tuning: most collections optimal at 2-3
 
@@ -66,9 +66,9 @@ DEFAULT_E_DAYS = 3.0   # Was 14; tuning: most collections optimal at 2-3
 # When enabled, specimens from different collectors are NEVER merged,
 # even if collected at the same place/time.
 COLLECTION_COLLECTOR_AWARE = {
-    'orn': True,     # Prevents multi-decade chaining
-    'botany': True,  # Worst coherence (0.547); biggest improvement opportunity
-    'herp': True,    # Tuning uses stage3, implying collector patterns matter
+    "orn": True,     # Prevents multi-decade chaining
+    "botany": True,  # Worst coherence (0.547); biggest improvement opportunity
+    "herp": True,    # Tuning uses stage3, implying collector patterns matter
 }
 DEFAULT_COLLECTOR_AWARE = False
 
@@ -79,24 +79,24 @@ DEFAULT_COLLECTOR_AWARE = False
 
 # Maximum temporal gap (days) between expedition end/start to consider merging
 COLLECTION_MERGE_GAP_DAYS = {
-    'antweb': 2, 'ent': 2, 'orn-en': 2, 'herp': 2, 'ich': 2, 'geo': 2,
-    'iz': 4, 'orn': 4,
+    "antweb": 2, "ent": 2, "orn-en": 2, "herp": 2, "ich": 2, "geo": 2,
+    "iz": 4, "orn": 4,
     # botany(3), ent_types(3), mam(3) match default
 }
 DEFAULT_MERGE_GAP_DAYS = 3
 
 # Maximum spatial distance (km) between expedition centroids to consider merging
 COLLECTION_MERGE_DISTANCE_KM = {
-    'antweb': 10, 'ent': 10, 'mam': 10, 'orn-en': 10,
-    'orn': 15, 'ent_types': 20,
+    "antweb": 10, "ent": 10, "mam": 10, "orn-en": 10,
+    "orn": 15, "ent_types": 20,
     # botany(30), geo(30), herp(30), ich(30), iz(30) match default
 }
 DEFAULT_MERGE_DISTANCE_KM = 30
 
 # Minimum merge score (0-1) required to execute a merge
 COLLECTION_MERGE_THRESHOLD = {
-    'antweb': 0.5, 'ent': 0.5, 'ent_types': 0.5, 'geo': 0.5, 'orn-en': 0.5,
-    'ich': 0.7, 'botany': 0.7, 'iz': 0.7, 'mam': 0.7,
+    "antweb": 0.5, "ent": 0.5, "ent_types": 0.5, "geo": 0.5, "orn-en": 0.5,
+    "ich": 0.7, "botany": 0.7, "iz": 0.7, "mam": 0.7,
     # herp(0.6), orn(0.6) match default
 }
 DEFAULT_MERGE_THRESHOLD = 0.6
@@ -111,6 +111,7 @@ def get_collection_e_dist(collection_name: str) -> float:
 
     Returns:
         Spatial epsilon in kilometers
+
     """
     return COLLECTION_E_DIST.get(collection_name, DEFAULT_E_DIST)
 
@@ -124,6 +125,7 @@ def get_collection_e_days(collection_name: str) -> float:
 
     Returns:
         Temporal epsilon in days
+
     """
     return COLLECTION_E_DAYS.get(collection_name, DEFAULT_E_DAYS)
 
@@ -140,6 +142,7 @@ def get_collection_collector_aware(collection_name: str) -> bool:
 
     Returns:
         True if collector-aware clustering should be used
+
     """
     return COLLECTION_COLLECTOR_AWARE.get(collection_name, DEFAULT_COLLECTOR_AWARE)
 
@@ -233,7 +236,7 @@ def main():
     )
     parser.add_argument(
         "--collector-aware",
-        type=lambda x: x.lower() in ('true', '1', 'yes'),
+        type=lambda x: x.lower() in ("true", "1", "yes"),
         default=None,
         help="Enable collector-aware clustering (default: auto per collection, orn=True, others=False). "
              "When enabled, specimens from different collectors are never merged into the same expedition.",
@@ -378,7 +381,7 @@ def main():
     # Run clustering
     collector_str = ", collector-aware" if collector_aware else ""
     merge_str = ", merge disabled" if not enable_merge else ""
-    alias_str = f", using alias file" if args.collector_alias_file else ""
+    alias_str = ", using alias file" if args.collector_alias_file else ""
     print(f"Clustering {len(df_valid)} specimens (e_dist={e_dist}km, e_days={e_days} days{collector_str}{merge_str}{alias_str})...")
     pipeline = create_pipeline(
         e_dist=e_dist,
@@ -433,17 +436,17 @@ def main():
     num_clusters = clustered["spatiotemporal_cluster_id"].nunique()
     cluster_sizes = clustered.groupby("spatiotemporal_cluster_id").size()
 
-    print(f"\nResults:")
+    print("\nResults:")
     print(f"  Specimens: {len(clustered)}")
     print(f"  Clusters: {num_clusters}")
     print(f"  Avg size: {len(clustered) / num_clusters:.1f}")
     print(f"  Largest: {cluster_sizes.max()}")
 
     # Multi-collection expedition stats
-    if "is_multi_collection" in clustered.columns and clustered["collection"].nunique() > 1:
+    if "is_multi_collection" in clustered.columns and len(clustered["collection"].dropna().unique()) > 1:
         multi_coll_clusters = clustered[clustered["is_multi_collection"]]["spatiotemporal_cluster_id"].nunique()
         multi_coll_specimens = clustered["is_multi_collection"].sum()
-        print(f"\nCross-collection expeditions:")
+        print("\nCross-collection expeditions:")
         print(f"  Multi-collection clusters: {multi_coll_clusters} ({100*multi_coll_clusters/num_clusters:.1f}%)")
         print(f"  Specimens in multi-collection clusters: {multi_coll_specimens} ({100*multi_coll_specimens/len(clustered):.1f}%)")
 
@@ -454,13 +457,13 @@ def main():
         ).sort_values("specimens", ascending=False)
 
         if len(combo_counts) > 0:
-            print(f"\n  Collection combinations:")
+            print("\n  Collection combinations:")
             for combo, row in combo_counts.head(10).iterrows():
                 print(f"    {combo}: {row['clusters']} clusters, {row['specimens']} specimens")
 
     # Per-collection breakdown if multiple collections
-    if "collection" in clustered.columns and clustered["collection"].nunique() > 1:
-        print(f"\nPer-collection breakdown:")
+    if "collection" in clustered.columns and len(clustered["collection"].dropna().unique()) > 1:
+        print("\nPer-collection breakdown:")
         for coll in sorted(clustered["collection"].unique()):
             coll_df = clustered[clustered["collection"] == coll]
             coll_clusters = coll_df["spatiotemporal_cluster_id"].nunique()

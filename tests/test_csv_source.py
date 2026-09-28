@@ -2,7 +2,6 @@
 
 import importlib.util
 from pathlib import Path
-import sys
 
 import pandas as pd
 import pytest
@@ -14,8 +13,8 @@ _csv_source = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_csv_source)
 
 # Import functions from the loaded module
-_build_datetime = _csv_source._build_datetime
-_build_fullname = _csv_source._build_fullname
+_build_datetime = _csv_source._build_datetime  # noqa: SLF001 - unit tests of the private helpers
+_build_fullname = _csv_source._build_fullname  # noqa: SLF001
 list_available_collections = _csv_source.list_available_collections
 load_collection_csv = _csv_source.load_collection_csv
 load_csv_data = _csv_source.load_csv_data
@@ -219,7 +218,7 @@ class TestLoadCollectionCsv:
         with pytest.raises(FileNotFoundError):
             load_collection_csv("/nonexistent/path/to/data")
 
-    def test_raises_for_missing_csv_in_directory(self):
+    def test_raises_for_missing_csv_in_directory(self, tmp_path):
         """Test that FileNotFoundError is raised when directory lacks CSV."""
         with pytest.raises(FileNotFoundError):
-            load_collection_csv("/tmp")  # Directory exists but no PortalData.csv
+            load_collection_csv(tmp_path)  # Directory exists but no PortalData.csv

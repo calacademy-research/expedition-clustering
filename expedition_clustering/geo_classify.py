@@ -19,18 +19,15 @@ Uses coordinate-based heuristics optimized for low error rates.
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
 # ============================================================================
 # Named Scientific Regions - Bounding boxes for key research areas
-# Format: (min_lat, max_lat, min_lng, max_lng)
+# Format: a tuple of min_lat, max_lat, min_lng, max_lng
 # ============================================================================
 
 NAMED_REGIONS = {
@@ -167,18 +164,17 @@ def _get_treeline_elevation(lat: float) -> float:
 
     if abs_lat < 10:
         return 4000  # Equatorial
-    elif abs_lat < 23.5:
+    if abs_lat < 23.5:
         return 3800  # Tropical
-    elif abs_lat < 35:
+    if abs_lat < 35:
         return 3200  # Subtropical
-    elif abs_lat < 45:
+    if abs_lat < 45:
         return 2500  # Temperate
-    elif abs_lat < 55:
+    if abs_lat < 55:
         return 1800  # Cool temperate
-    elif abs_lat < 66.5:
+    if abs_lat < 66.5:
         return 1000  # Subarctic
-    else:
-        return 0  # Arctic - no treeline
+    return 0  # Arctic - no treeline
 
 
 def get_elevation_band(
@@ -200,6 +196,7 @@ def get_elevation_band(
     str
         Elevation band name: coastal, lowland, submontane, montane,
         upper_montane, alpine, nival, or unknown
+
     """
     if elevation_m is None or pd.isna(elevation_m):
         return "unknown"
@@ -211,18 +208,17 @@ def get_elevation_band(
     # Standard classification
     if elevation_m < 50:
         return "coastal"
-    elif elevation_m < 500:
+    if elevation_m < 500:
         return "lowland"
-    elif elevation_m < 1500:
+    if elevation_m < 1500:
         return "submontane"
-    elif elevation_m < 2500:
+    if elevation_m < 2500:
         return "montane"
-    elif elevation_m < 3500:
+    if elevation_m < 3500:
         return "upper_montane"
-    elif elevation_m < 4500:
+    if elevation_m < 4500:
         return "alpine"
-    else:
-        return "nival"
+    return "nival"
 
 
 def is_high_altitude(
@@ -246,6 +242,7 @@ def is_high_altitude(
     -------
     bool
         True if elevation >= threshold
+
     """
     if elevation_m is None or pd.isna(elevation_m):
         return False
@@ -272,6 +269,7 @@ def is_above_treeline(
     -------
     bool
         True if above estimated treeline
+
     """
     if elevation_m is None or pd.isna(elevation_m):
         return False
@@ -498,26 +496,17 @@ MANGROVE_REGIONS = {
 
 def _is_desert_region(lat: float, lng: float) -> bool:
     """Check if coordinates fall in major desert regions."""
-    for name, bounds in DESERT_REGIONS.items():
-        if _point_in_region_bounds(lat, lng, bounds):
-            return True
-    return False
+    return any(_point_in_region_bounds(lat, lng, bounds) for bounds in DESERT_REGIONS.values())
 
 
 def _is_steppe_region(lat: float, lng: float) -> bool:
     """Check if coordinates fall in steppe/semi-arid regions."""
-    for name, bounds in STEPPE_REGIONS.items():
-        if _point_in_region_bounds(lat, lng, bounds):
-            return True
-    return False
+    return any(_point_in_region_bounds(lat, lng, bounds) for bounds in STEPPE_REGIONS.values())
 
 
 def _is_mediterranean_region(lat: float, lng: float) -> bool:
     """Check if coordinates fall in Mediterranean climate regions."""
-    for name, bounds in MEDITERRANEAN_REGIONS.items():
-        if _point_in_region_bounds(lat, lng, bounds):
-            return True
-    return False
+    return any(_point_in_region_bounds(lat, lng, bounds) for bounds in MEDITERRANEAN_REGIONS.values())
 
 
 def _is_oceanic_climate(lat: float, lng: float) -> bool:
@@ -535,9 +524,7 @@ def _is_oceanic_climate(lat: float, lng: float) -> bool:
     if -55 <= lat <= -40 and -76 <= lng <= -70:
         return True
     # Tasmania
-    if -44 <= lat <= -40 and 144 <= lng <= 149:
-        return True
-    return False
+    return -44 <= lat <= -40 and 144 <= lng <= 149
 
 
 def _is_continental_climate(lat: float, lng: float) -> bool:
@@ -549,9 +536,7 @@ def _is_continental_climate(lat: float, lng: float) -> bool:
     if 45 <= lat <= 60 and 20 <= lng <= 60:
         return True
     # Northeast Asia
-    if 35 <= lat <= 55 and 100 <= lng <= 140:
-        return True
-    return False
+    return 35 <= lat <= 55 and 100 <= lng <= 140
 
 
 def _point_in_region_bounds(lat: float, lng: float, bounds: dict) -> bool:
@@ -565,8 +550,7 @@ def _point_in_region_bounds(lat: float, lng: float, bounds: dict) -> bool:
     # Handle longitude wraparound
     if lng_range[0] <= lng_range[1]:
         return lng_range[0] <= lng <= lng_range[1]
-    else:
-        return lng >= lng_range[0] or lng <= lng_range[1]
+    return lng >= lng_range[0] or lng <= lng_range[1]
 
 
 def get_biome(
@@ -592,6 +576,7 @@ def get_biome(
         Biome name: tundra, taiga, temperate_forest, temperate_grassland,
         desert, mediterranean, tropical_rainforest, tropical_savanna,
         montane, alpine, or unknown
+
     """
     abs_lat = abs(lat)
 
@@ -601,7 +586,7 @@ def get_biome(
             return "alpine"
         if elevation_m >= 2500:
             # Check if in mountain range
-            for name, bounds in MOUNTAIN_RANGES.items():
+            for bounds in MOUNTAIN_RANGES.values():
                 if _point_in_region_bounds(lat, lng, bounds):
                     return "montane"
 
@@ -610,13 +595,13 @@ def get_biome(
         return "tundra"
 
     # Check specific tundra regions
-    for name, bounds in TUNDRA_REGIONS.items():
+    for bounds in TUNDRA_REGIONS.values():
         if _point_in_region_bounds(lat, lng, bounds):
             return "tundra"
 
     # Taiga/Boreal (50-66.5° in continental regions)
     if 50 <= abs_lat < 66.5:
-        for name, bounds in TAIGA_REGIONS.items():
+        for bounds in TAIGA_REGIONS.values():
             if _point_in_region_bounds(lat, lng, bounds):
                 return "taiga"
 
@@ -625,41 +610,40 @@ def get_biome(
         return "desert"
 
     # Tropical rainforest
-    for name, bounds in RAINFOREST_REGIONS.items():
+    for bounds in RAINFOREST_REGIONS.values():
         if _point_in_region_bounds(lat, lng, bounds):
             return "tropical_rainforest"
 
     # Tropical savanna
-    for name, bounds in SAVANNA_REGIONS.items():
+    for bounds in SAVANNA_REGIONS.values():
         if _point_in_region_bounds(lat, lng, bounds):
             return "tropical_savanna"
 
     # Mediterranean
-    for name, bounds in MEDITERRANEAN_REGIONS.items():
+    for bounds in MEDITERRANEAN_REGIONS.values():
         if _point_in_region_bounds(lat, lng, bounds):
             return "mediterranean"
 
     # Steppe/temperate grassland
-    for name, bounds in STEPPE_REGIONS.items():
+    for bounds in STEPPE_REGIONS.values():
         if _point_in_region_bounds(lat, lng, bounds):
             return "temperate_grassland"
 
     # Temperate forest
-    for name, bounds in TEMPERATE_FOREST_REGIONS.items():
+    for bounds in TEMPERATE_FOREST_REGIONS.values():
         if _point_in_region_bounds(lat, lng, bounds):
             return "temperate_forest"
 
     # Default by latitude
     if abs_lat < 23.5:
         return "tropical"
-    elif abs_lat < 35:
+    if abs_lat < 35:
         return "subtropical"
-    elif abs_lat < 50:
+    if abs_lat < 50:
         return "temperate"
-    elif abs_lat < 66.5:
+    if abs_lat < 66.5:
         return "boreal"
-    else:
-        return "polar"
+    return "polar"
 
 
 def get_mountain_range(lat: float, lng: float) -> str | None:
@@ -677,6 +661,7 @@ def get_mountain_range(lat: float, lng: float) -> str | None:
     -------
     str or None
         Mountain range name or None if not in a known range
+
     """
     for name, bounds in MOUNTAIN_RANGES.items():
         if _point_in_region_bounds(lat, lng, bounds):
@@ -699,11 +684,9 @@ def is_coral_reef_region(lat: float, lng: float) -> bool:
     -------
     bool
         True if in a coral reef region
+
     """
-    for name, bounds in CORAL_REEF_REGIONS.items():
-        if _point_in_region_bounds(lat, lng, bounds):
-            return True
-    return False
+    return any(_point_in_region_bounds(lat, lng, bounds) for bounds in CORAL_REEF_REGIONS.values())
 
 
 def is_mangrove_region(lat: float, lng: float) -> bool:
@@ -721,11 +704,9 @@ def is_mangrove_region(lat: float, lng: float) -> bool:
     -------
     bool
         True if in a mangrove region
+
     """
-    for name, bounds in MANGROVE_REGIONS.items():
-        if _point_in_region_bounds(lat, lng, bounds):
-            return True
-    return False
+    return any(_point_in_region_bounds(lat, lng, bounds) for bounds in MANGROVE_REGIONS.values())
 
 
 def get_specific_desert(lat: float, lng: float) -> str | None:
@@ -743,6 +724,7 @@ def get_specific_desert(lat: float, lng: float) -> str | None:
     -------
     str or None
         Desert name or None if not in a desert
+
     """
     for name, bounds in DESERT_REGIONS.items():
         if _point_in_region_bounds(lat, lng, bounds):
@@ -774,10 +756,9 @@ def get_biogeographic_realm(lat: float, lng: float) -> str:
     use WWF ecoregion shapefiles.
     """
     # Handle Pacific Islands specially (Oceanian realm)
-    if -30 <= lat <= 30:
-        # Central/South Pacific
-        if 150 <= lng <= 180 or -180 <= lng <= -100:
-            return "Oceanian"
+    # Central/South Pacific
+    if -30 <= lat <= 30 and (150 <= lng <= 180 or -180 <= lng <= -100):
+        return "Oceanian"
 
     # Antarctic
     if lat < -60:
@@ -795,9 +776,8 @@ def get_biogeographic_realm(lat: float, lng: float) -> str:
             if lng_range[0] <= lng_range[1]:
                 if lng_range[0] <= lng <= lng_range[1]:
                     return realm
-            else:  # Crosses dateline
-                if lng >= lng_range[0] or lng <= lng_range[1]:
-                    return realm
+            elif lng >= lng_range[0] or lng <= lng_range[1]:
+                return realm
 
     return "Unknown"
 
@@ -812,16 +792,15 @@ def get_latitude_band(lat: float) -> str:
 
     if abs_lat < 10:
         return "equatorial"
-    elif abs_lat < 23.5:
+    if abs_lat < 23.5:
         return "tropical"
-    elif abs_lat < 35:
+    if abs_lat < 35:
         return "subtropical"
-    elif abs_lat < 50:
+    if abs_lat < 50:
         return "temperate"
-    elif abs_lat < 66.5:
+    if abs_lat < 66.5:
         return "subarctic" if lat > 0 else "subantarctic"
-    else:
-        return "polar"
+    return "polar"
 
 
 # ============================================================================
@@ -839,7 +818,7 @@ def is_island_location(lat: float, lng: float) -> bool:
     for region_name, bounds in NAMED_REGIONS.items():
         if _point_in_bounds(lat, lng, bounds):
             # Check if this region is an island group
-            for group_name, regions in ISLAND_GROUPS.items():
+            for regions in ISLAND_GROUPS.values():
                 if region_name in regions:
                     return True
 
@@ -849,10 +828,7 @@ def is_island_location(lat: float, lng: float) -> bool:
         return True
 
     # Caribbean
-    if 10 <= lat <= 27 and -85 <= lng <= -60:
-        return True
-
-    return False
+    return 10 <= lat <= 27 and -85 <= lng <= -60
 
 
 def _point_in_bounds(lat: float, lng: float, bounds: tuple) -> bool:
@@ -865,8 +841,7 @@ def _point_in_bounds(lat: float, lng: float, bounds: tuple) -> bool:
     # Handle longitude wraparound
     if min_lng <= max_lng:
         return min_lng <= lng <= max_lng
-    else:
-        return lng >= min_lng or lng <= max_lng
+    return lng >= min_lng or lng <= max_lng
 
 
 # ============================================================================
@@ -909,6 +884,7 @@ def classify_coordinates(
         - is_coral_reef_region: Boolean
         - is_mangrove_region: Boolean
         - desert_name: Specific desert name or None
+
     """
     result = {
         "region": None,
@@ -975,10 +951,8 @@ def classify_coordinates(
     # Specific desert
     result["desert_name"] = get_specific_desert(lat, lng)
 
-    # Environment (enhanced)
-    if result["is_island"]:
-        result["environment"] = "marine_coastal"
-    elif result["is_coral_reef_region"] or result["is_mangrove_region"]:
+    # Environment, enhanced
+    if result["is_island"] or result["is_coral_reef_region"] or result["is_mangrove_region"]:
         result["environment"] = "marine_coastal"
     elif result["is_above_treeline"]:
         result["environment"] = "alpine"
@@ -1016,6 +990,7 @@ def classify_dataframe(
     -------
     pd.DataFrame
         Original DataFrame with added classification columns
+
     """
     logger.info(f"Classifying {len(df)} coordinates...")
 
@@ -1039,7 +1014,7 @@ def classify_dataframe(
         "geo_desert_name": [],
     }
 
-    for idx, row in df.iterrows():
+    for _idx, row in df.iterrows():
         lat = row.get(lat_col)
         lng = row.get(lng_col)
         elevation = row.get(elevation_col) if elevation_col else None
@@ -1108,6 +1083,7 @@ def classify_expeditions(
     -------
     pd.DataFrame
         Original DataFrame with added classification columns
+
     """
     logger.info(f"Classifying {df[cluster_col].nunique()} expedition clusters...")
 
