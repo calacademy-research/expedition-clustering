@@ -142,7 +142,25 @@ def transform_csv_to_pipeline_format(
     """
     result = pd.DataFrame()
 
-    # Generate synthetic IDs - use catalogNumber if available, otherwise row index
+    # The specimen's identity is its spid, the qualified catalog identifier
+    # ("urn:catalog:CAS:SUR:6788"). A bare catalog number is not unique inside
+    # one PortalData.csv: herp holds the HERP, SUA and SUR catalogs and ich two
+    # catalogs whose numbers overlap, and keying on the number made the
+    # Preprocessor drop every later row sharing a number as a duplicate
+    # (bug #426: 46,169 herp rows, 69,708 ich rows on 2026-10-04). The Lens
+    # maps clustered rows back to specimens by spid too, so a row without one
+    # cannot be placed and is refused rather than given a made-up key.
+    if "spid" not in df.columns:
+        msg = "PortalData.csv has no spid column: spid is the specimen key for clustering (EXP-CLUSTER-ID-1)"
+        raise ValueError(msg)
+    spids = df["spid"].fillna("").astype(str).str.strip()
+    blank = int((spids == "").sum())
+    if blank:
+        msg = f"{blank} PortalData.csv row(s) have no spid; spid is the specimen key for clustering (EXP-CLUSTER-ID-1)"
+        raise ValueError(msg)
+
+    # collectionobjectid is carried for reference only (the numeric catalog
+    # number); nothing joins or deduplicates on it.
     if "catalogNumber" in df.columns:
         result["collectionobjectid"] = pd.to_numeric(df["catalogNumber"], errors="coerce")
         # Fill any NaN with a unique negative value based on index
@@ -152,14 +170,12 @@ def transform_csv_to_pipeline_format(
     else:
         result["collectionobjectid"] = df.index + 1
 
-    # Keep spid for reference
-    if "spid" in df.columns:
-        result["spid"] = df["spid"]
+    result["spid"] = spids
 
-    # Generate synthetic collectingeventid
-    # Group by collector + date + locality to create pseudo-events
-    # For simplicity, use the same as collectionobjectid (each specimen = 1 event)
-    result["collectingeventid"] = result["collectionobjectid"]
+    # Each specimen is its own collecting event, keyed by its spid; the
+    # Preprocessor's duplicate drop therefore only removes a specimen listed
+    # twice.
+    result["collectingeventid"] = spids
 
     # Detect date format and build datetime accordingly
     date_format = _detect_date_format(df, "startDate")
