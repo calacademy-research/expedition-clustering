@@ -285,14 +285,24 @@ def load_collector_aliases(alias_file: Path) -> dict[str, str]:
     Returns:
         Dict mapping normalized names to canonical IDs
 
+    Raises:
+        FileNotFoundError: the file does not exist.
+        ValueError: the file lacks the normalized_name or canonical_id column.
+
+    A caller that passes an alias file asked for its spelling map; clustering
+    without it would quietly give different expeditions, so neither case is
+    answered with an empty map (bug #430, EXP-ALIAS-1).
+
     """
     if not alias_file.exists():
-        return {}
+        msg = f"Collector alias file not found: {alias_file}"
+        raise FileNotFoundError(msg)
 
     df = pd.read_csv(alias_file)
-    if "normalized_name" not in df.columns or "canonical_id" not in df.columns:
-        logger.warning("Alias file %s missing required columns", alias_file)
-        return {}
+    missing = [c for c in ("normalized_name", "canonical_id") if c not in df.columns]
+    if missing:
+        msg = f"Collector alias file {alias_file} lacks column(s) {', '.join(missing)}; has {list(df.columns)}"
+        raise ValueError(msg)
 
     return dict(zip(df["normalized_name"], df["canonical_id"].astype(str), strict=True))
 
