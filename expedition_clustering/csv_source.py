@@ -90,19 +90,14 @@ def _detect_date_format(df: pd.DataFrame, date_col: str) -> str:
         'components' if dates are year integers with separate month/day columns
 
     """
-    if date_col not in df.columns:
+    # The month column is what the components layout adds. Looking at the
+    # first value instead (bug #427) misreads an ISO file whose first date is
+    # year-only ("1911") as components, and the herp converter now writes the
+    # components layout, whose year column holds no dash either.
+    if "ce_startDate" in df.columns:
         return "components"
-
-    # Get first non-null value
-    sample = df[date_col].dropna().head(10)
-    if sample.empty:
-        return "components"
-
-    # Check if values are strings containing dashes (ISO format)
-    first_val = sample.iloc[0]
-    if isinstance(first_val, str) and "-" in first_val:
+    if date_col in df.columns:
         return "iso"
-
     return "components"
 
 
@@ -182,14 +177,22 @@ def transform_csv_to_pipeline_format(
     if logger:
         logger.info("  Date format detected: %s", date_format)
 
+    # date_precision (bug #427, EXP-DATE-2): 1 = day, 2 = month, 3 = year,
+    # Specify's scale. A date known only to the month or the year is padded to
+    # the first day (the sort key the clustering needs), and the precision
+    # records that the padding happened so the pipeline never treats it as
+    # that day.
     if date_format == "iso":
-        # Direct parsing of ISO date strings (mam, orn collections)
-        result["startdate"] = pd.to_datetime(df.get("startDate"), errors="coerce")
-        result["enddate"] = pd.to_datetime(df.get("endDate"), errors="coerce")
+        # ISO strings "YYYY-MM-DD", "YYYY-MM" or "YYYY" (antweb)
+        result["startdate"], result["date_precision"] = _parse_iso_with_precision(df.get("startDate"), df.index)
+        result["enddate"], _ = _parse_iso_with_precision(df.get("endDate"), df.index)
     else:
-        # Build datetime from year/month/day components (botany, ich, iz collections)
+        # Build datetime from year/month/day components (botany, ich, iz, herp collections)
         result["startdate"] = _build_datetime(df, "startDate", "ce_startDate", "ce_startDate1")
         result["enddate"] = _build_datetime(df, "endDate", "ce_endDate", "ce_endDate1")
+        result["date_precision"] = _components_precision(df, "startDate", "ce_startDate", "ce_startDate1")
+    # A row without a usable start date has no precision either.
+    result.loc[result["startdate"].isna(), "date_precision"] = pd.NA
 
     # Copy coordinates
     result["latitude1"] = pd.to_numeric(df.get("latitude1"), errors="coerce")
@@ -284,6 +287,56 @@ def _build_datetime(
     )
 
     return pd.to_datetime(date_strings, errors="coerce")
+
+
+_ISO_DAY = r"^\d{4}-\d{2}-\d{2}$"
+_ISO_MONTH = r"^\d{4}-\d{2}$"
+_ISO_YEAR = r"^\d{4}$"
+
+
+def _parse_iso_with_precision(values: pd.Series | None, index: pd.Index) -> tuple[pd.Series, pd.Series]:
+    """
+    Parse ISO date strings that may stop at the month or the year.
+
+    Inputs:  a column of strings ("2001-03-04", "1911-04", "1911") or None.
+    Output:  (dates, precisions): the date padded to the first day of what the
+             string names, and 1 / 2 / 3 for day / month / year. A value of
+             any other shape gives NaT and <NA>.
+    """
+    if values is None:
+        return pd.Series(pd.NaT, index=index, dtype="datetime64[ns]"), pd.Series(pd.NA, index=index, dtype="Int64")
+    text = values.fillna("").astype(str).str.strip()
+    precision = pd.Series(pd.NA, index=index, dtype="Int64")
+    padded = pd.Series("", index=index, dtype=object)
+    for pattern, level, suffix in ((_ISO_DAY, 1, ""), (_ISO_MONTH, 2, "-01"), (_ISO_YEAR, 3, "-01-01")):
+        mask = text.str.match(pattern)
+        precision[mask] = level
+        padded[mask] = text[mask] + suffix
+    dates = pd.to_datetime(padded, format="%Y-%m-%d", errors="coerce")
+    precision[dates.isna()] = pd.NA
+    return dates, precision
+
+
+def _components_precision(df: pd.DataFrame, year_col: str, month_col: str, day_col: str) -> pd.Series:
+    """
+    Date precision from separate year / month / day columns.
+
+    Inputs:  the raw frame and the three column names.
+    Output:  Int64 series: 1 when the day is known, 2 when only the month is,
+             3 when only the year is, <NA> without a year. The same rule as the
+             Lens loader (portal.etl.date_utils.precision_from_components).
+    """
+    def numeric(col: str) -> pd.Series:
+        if col not in df.columns:
+            return pd.Series(float("nan"), index=df.index)
+        return pd.to_numeric(df[col], errors="coerce")
+
+    years, months, days = numeric(year_col), numeric(month_col), numeric(day_col)
+    precision = pd.Series(1, index=df.index, dtype="Int64")
+    precision[days.isna()] = 2
+    precision[months.isna()] = 3
+    precision[years.isna() | (years <= 0)] = pd.NA
+    return precision
 
 
 def _build_fullname(df: pd.DataFrame) -> pd.Series:

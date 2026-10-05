@@ -21,6 +21,9 @@ MIN_COLLECTOR_NAME_LEN = 2
 MAX_LAST_NAME_WORDS = 3
 # Two dated specimens are the fewest that have a gap between them.
 MIN_DATES_FOR_GAP = 2
+# How much of a collecting date is known, on Specify's scale: 1 the day,
+# 2 the month, 3 the year (bug #427).
+DATE_PRECISIONS = frozenset({1, 2, 3})
 
 
 def normalize_collector_name(name: str) -> str:
@@ -379,6 +382,9 @@ class _ExpeditionSummary:
     collectors: set
     vessel: str | None
     year: int
+    # The expedition's date precision (1 day, 2 month, 3 year); one value,
+    # since partitioning never mixes precisions (bug #427).
+    date_precision: int
 
 
 @dataclass
@@ -428,6 +434,7 @@ def _build_expedition_summary(
         collectors=collectors,
         vessel=vessel,
         year=start.year if pd.notna(start) else 0,
+        date_precision=int(group["date_precision"].max()),
     )
 
 
@@ -503,7 +510,7 @@ class Preprocessor(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
-        required_columns = ["collectingeventid", "latitude1", "longitude1", "startdate"]
+        required_columns = ["collectingeventid", "latitude1", "longitude1", "startdate", "date_precision"]
         missing = [col for col in required_columns if col not in X.columns]
         if missing:
             raise ValueError(
@@ -518,6 +525,18 @@ class Preprocessor(BaseEstimator, TransformerMixin):
 
         # Drop rows with null latitude1, longitude1, or startdate (should already be handled)
         X = X.dropna(subset=["latitude1", "longitude1", "startdate"])
+
+        # Every dated row says how much of its date is known (bug #427,
+        # EXP-DATE-2): 1 day, 2 month, 3 year. A padded date of unknown
+        # precision cannot be told from a real 1 January, so it is refused.
+        precision = pd.to_numeric(X["date_precision"], errors="coerce")
+        bad = ~precision.isin(DATE_PRECISIONS)
+        if bad.any():
+            sample = X.loc[bad, "date_precision"].head(5).tolist()
+            raise ValueError(
+                f"{int(bad.sum())} dated row(s) have no date_precision in {sorted(DATE_PRECISIONS)}: {sample}"
+            )
+        X["date_precision"] = precision.astype(int)
 
         # Drop rows outside valid latitude and longitude ranges
         X = X[(X["latitude1"].between(-90, 90)) & (X["longitude1"].between(-180, 180))]
@@ -605,9 +624,14 @@ class CollectorPartitioning(BaseEstimator, TransformerMixin):
     def transform(self, X):
         X = X.copy()
 
+        # Rows of different date precision never share a partition (bug #427,
+        # EXP-DATE-2): a year-only date padded to 1 January is not that day,
+        # so it must not chain with specimens collected on 1-3 January, and
+        # year-only rows group only with year-only rows of the same year (their
+        # padded dates are equal; another year is 365 days away).
         if not self.enabled:
-            # All specimens in same partition - standard behavior
-            X["collector_partition"] = 0
+            # One partition per date precision; otherwise every specimen together
+            X["collector_partition"] = X["date_precision"].astype(int)
             return X
 
         # Extract primary collector (for display) and collector group key (for clustering)
@@ -626,6 +650,7 @@ class CollectorPartitioning(BaseEstimator, TransformerMixin):
             X = X.drop(columns=["_year"])
         else:
             X["_partition_key"] = X["collector_group"]
+        X["_partition_key"] = X["_partition_key"] + "_p" + X["date_precision"].astype(int).astype(str)
 
         # Convert to integer partition IDs
         partition_map = {k: i for i, k in enumerate(X["_partition_key"].unique())}
@@ -1202,6 +1227,11 @@ class MergeExpeditions(BaseEstimator, TransformerMixin):
             for i, exp_a in enumerate(year_exps):
                 for j in range(i + 1, len(year_exps)):
                     exp_b = year_exps[j]
+
+                    # Never merge across date precisions (bug #427): a
+                    # year-only expedition's padded 1 January is not a day.
+                    if exp_a.date_precision != exp_b.date_precision:
+                        continue
 
                     # Temporal gap check (hard constraint)
                     if exp_a.end_date <= exp_b.start_date:

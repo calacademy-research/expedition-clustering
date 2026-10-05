@@ -14,6 +14,7 @@ def test_preprocessor_drops_invalid_and_duplicate_rows():
     input_df = pd.DataFrame(
         {
             "collectingeventid": [1, 1, 2, 3, 4, 5],
+            "date_precision": [1, 1, 1, 1, 1, 1],
             "latitude1": [0.0, 0.0, 95.0, 10.0, -20.0, 12.0],
             "longitude1": [0.0, 0.0, 50.0, 190.0, 200.0, 12.0],
             "startdate": [
@@ -39,6 +40,7 @@ def test_create_pipeline_clusters_and_labels_output():
     sample_df = pd.DataFrame(
         {
             "collectingeventid": [1, 2, 3, 4],
+            "date_precision": [1, 1, 1, 1],
             "latitude1": [0.0, 0.001, 10.0, 10.001],
             "longitude1": [0.0, 0.001, 20.0, 20.001],
             "startdate": ["2020-01-01", "2020-01-02", "2020-02-01", "2020-02-02"],
@@ -58,6 +60,7 @@ def test_validate_spatiotemporal_connectivity_raises_for_disconnected_clusters()
     disconnected = pd.DataFrame(
         {
             "collectingeventid": [1, 2],
+            "date_precision": [1, 1],
             "latitude1": [0.0, 0.0],
             "longitude1": [0.0, 2.0],  # ~222 km apart
             "startdate": ["2020-01-01", "2020-01-01"],
@@ -81,6 +84,8 @@ def _make_merge_df(records):
             df[col] = df["spatiotemporal_cluster_id"]
     if "collectingeventid" not in df.columns:
         df["collectingeventid"] = range(len(df))
+    # Day-precision dates (bug #427: every row carries its date precision).
+    df["date_precision"] = 1
     return df
 
 
@@ -203,6 +208,7 @@ def test_create_pipeline_with_merge():
     """Full pipeline with merge stage enabled should work end-to-end."""
     sample_df = pd.DataFrame({
         "collectingeventid": [1, 2, 3, 4],
+        "date_precision": [1, 1, 1, 1],
         "latitude1": [0.0, 0.001, 10.0, 10.001],
         "longitude1": [0.0, 0.001, 20.0, 20.001],
         "startdate": ["2020-01-01", "2020-01-02", "2020-02-01", "2020-02-02"],
@@ -218,6 +224,7 @@ def test_create_pipeline_no_merge():
     """Pipeline with merge disabled should still produce valid output."""
     sample_df = pd.DataFrame({
         "collectingeventid": [1, 2, 3, 4],
+        "date_precision": [1, 1, 1, 1],
         "latitude1": [0.0, 0.001, 10.0, 10.001],
         "longitude1": [0.0, 0.001, 20.0, 20.001],
         "startdate": ["2020-01-01", "2020-01-02", "2020-02-01", "2020-02-02"],

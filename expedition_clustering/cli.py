@@ -228,6 +228,7 @@ def _load_from_database(args: argparse.Namespace, logger: logging.Logger) -> pd.
     SELECT
         ce.CollectingEventID as collectingeventid,
         ce.StartDate as startdate,
+        ce.StartDatePrecision as date_precision,
         ce.EndDate as enddate,
         ce.Remarks as remarks,
         ce.LocalityID as localityid,
