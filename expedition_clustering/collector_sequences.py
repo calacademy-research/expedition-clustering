@@ -444,7 +444,8 @@ def build_sequences(rows: pd.DataFrame) -> SequenceResult:
     Inputs:  prepare_rows' frame.
     Output:  SequenceResult whose rows gain sequence_id (Int64; <NA> for rows
              excluded or linked to nothing, ids 0.. in key/day order) and whose
-             rule also carries RULE_NONSEQUENTIAL and RULE_SPREAD.
+             rule also carries RULE_NONSEQUENTIAL and RULE_SPREAD;
+             candidate_sequence_id also keeps the spread-cut sequences' ids.
              reused_keys / nonsequential_keys name the flagged keys;
              spread_km is the robust spread per sequence id (sequences with
              >= 2 located rows, the spread-cut ones included).
@@ -482,8 +483,180 @@ def build_sequences(rows: pd.DataFrame) -> SequenceResult:
             wide = set(spread[spread > SPREAD_KM].index)
             hit = rows["sequence_id"].isin(wide).fillna(value=False).to_numpy(dtype=bool)
             rows.loc[hit, "rule"] = RULE_SPREAD
+    # candidate_sequence_id keeps the spread-cut sequences' ids for the sequence
+    # table; sequence_id is the sequences that passed every rule.
+    rows["candidate_sequence_id"] = seq
     rows["sequence_id"] = seq
     rows.loc[rows["rule"] != "", "sequence_id"] = pd.NA
     return SequenceResult(rows=rows, reused_keys=set(reused),
                           nonsequential_keys={k for k, _ in nonseq}, spread_km=spread)
 
+
+
+# ---------------------------------------------------------------- merge with the spatial clusters
+
+JOIN_SPATIAL = "spatial"
+JOIN_NUMBER = "collector_number"
+DISPOSITION_IN_CLUSTER = "in cluster"
+DISPOSITION_ATTACHED = "attached"
+DISPOSITION_SEQUENCE_ONLY = "sequence-only"
+DISPOSITION_BELOW_FLOOR = "below floor"
+DISPOSITION_SPREAD = RULE_SPREAD
+SOURCES = ("specify", "engine", "none")
+# Score weights for the nearest clustered row: number gap first, then day gap,
+# then the cluster's rank. Days in one sequence are < 366 and a sequence holds
+# fewer than 10**6 clusters, so the weights never overlap.
+_DAY_WEIGHT = 10**6
+_NUMBER_WEIGHT = 10**9
+SEQUENCE_TABLE_COLUMNS = ["collector_sequence_id", "collector_key", "series", "number_min", "number_max",
+                          "day_min", "day_max", "rows", "specify_rows", "engine_rows", "unlocated_rows",
+                          "spread_km", "median_lat", "median_lng", "cluster_ids", "disposition"]
+_EPOCH = dt_date(1970, 1, 1)
+
+
+def _source_label(source: str) -> str:
+    return source if source else "none"
+
+
+def _by_source(sources: pd.Series) -> dict[str, int]:
+    counts = sources.map(_source_label).value_counts()
+    return {s: int(counts.get(s, 0)) for s in SOURCES}
+
+
+@dataclass
+class MergeResult:
+    """merge_with_clusters' answer."""
+
+    # spid, spatiotemporal_cluster_id, cluster_join (always JOIN_NUMBER): the
+    # rows the sequences add to the output, nothing else.
+    assignments: pd.DataFrame
+    # One row per sequence (PLAN §4.2), the spread-cut ones included.
+    sequences: pd.DataFrame
+    sequence_only_expeditions: int
+    sequence_only_rows: int
+    # The rows in a sequence that passed every rule: spid, sequence_id,
+    # coordinate_source, and the cluster they end in (-1: none).
+    sequence_rows: pd.DataFrame
+
+    def attached_rows(self) -> int:
+        """Rows added to an existing spatial cluster."""
+        return int(self.assignments["attached"].sum())
+
+    def attached_by_source(self) -> dict[str, int]:
+        """Rows added to an existing spatial cluster, by coordinate source."""
+        spids = set(self.assignments.loc[self.assignments["attached"], "spid"])
+        return _by_source(self.sequence_rows.loc[self.sequence_rows["spid"].isin(spids), "coordinate_source"])
+
+    def in_sequences_by_source(self) -> dict[str, int]:
+        """Rows in a sequence that passed every rule, by coordinate source."""
+        return _by_source(self.sequence_rows["coordinate_source"])
+
+
+def _nearest_clusters(seq: pd.DataFrame, cluster: np.ndarray) -> np.ndarray:
+    """
+    For one sequence's rows, the cluster each un-clustered row joins.
+
+    Inputs:  the sequence's rows (number, day) and their cluster ids (-1 for
+             none; at least one row clustered).
+    Output:  cluster id per row: its own for a clustered row; for the others
+             the cluster of the clustered row nearest in number, then in day,
+             then the lower cluster id.
+    """
+    num = seq["number"].to_numpy(dtype=np.int64)
+    day = seq["day"].to_numpy(dtype=np.int64)
+    done = cluster >= 0
+    out = cluster.copy()
+    c_num, c_day, c_id = num[done], day[done], cluster[done]
+    rank = np.unique(c_id, return_inverse=True)[1]
+    todo = np.flatnonzero(~done)
+    score = (np.abs(num[todo, None] - c_num[None, :]) * _NUMBER_WEIGHT
+             + np.abs(day[todo, None] - c_day[None, :]) * _DAY_WEIGHT + rank[None, :])
+    out[todo] = c_id[np.argmin(score, axis=1)]
+    return out
+
+
+def _iso(day: int) -> str:
+    return (_EPOCH + pd.Timedelta(days=int(day))).isoformat()
+
+
+def _sequence_row(sid: int, seq: pd.DataFrame, final: np.ndarray, disposition: str) -> list:
+    """One row of the sequence table (PLAN §4.2); spread_km is filled by the caller."""
+    src = seq["coordinate_source"]
+    located = seq[seq["lat"].notna()]
+    clusters = sorted({int(c) for c in final if c >= 0})
+    return [
+        int(sid), seq["key"].iloc[0], seq["series"].iloc[0], int(seq["number"].min()), int(seq["number"].max()),
+        _iso(seq["day"].min()), _iso(seq["day"].max()), len(seq), int((src == "specify").sum()),
+        int((src == "engine").sum()), int((src == "").sum()), np.nan,
+        float(located["lat"].median()) if len(located) else np.nan,
+        float(located["lng"].median()) if len(located) else np.nan,
+        " ".join(str(c) for c in clusters), disposition,
+    ]
+
+
+def merge_with_clusters(result: SequenceResult, cluster_of: pd.Series, min_specimens: int) -> MergeResult:
+    """
+    Add the sequences to the spatial clusters (PLAN §3, EXP-SEQ-4).
+
+    Inputs:  result -- build_sequences' answer;
+             cluster_of -- spid -> spatiotemporal_cluster_id of every row the
+             spatial clustering kept (after its size floor);
+             min_specimens -- the size floor for a sequence-only expedition.
+    Output:  MergeResult. A clustered row never moves and no two clusters
+             merge. A sequence row in no kept cluster joins the cluster of the
+             sequence's clustered row nearest in number (then day, then the
+             lower cluster id). A sequence with no clustered row and at least
+             min_specimens rows becomes a new cluster, numbered above the
+             largest spatial id in sequence-id order; a smaller one joins
+             nothing. assignments.attached is True for a row added to an
+             existing spatial cluster, False for a sequence-only row.
+    """
+    rows = result.rows
+    in_seq = rows[rows["sequence_id"].notna()].copy()
+    in_seq["sequence_id"] = in_seq["sequence_id"].astype("int64")
+    in_seq["cluster"] = in_seq["spid"].map(cluster_of).fillna(-1).astype("int64")
+    in_seq = in_seq.sort_values(["sequence_id", "number", "day"], kind="stable")
+
+    next_id = int(cluster_of.max()) + 1 if len(cluster_of) else 0
+    spids, clusters, attached, finals, table = [], [], [], [], []
+    only_count = only_rows = 0
+    for sid, seq in in_seq.groupby("sequence_id", sort=True):
+        cluster = seq["cluster"].to_numpy()
+        clustered = cluster >= 0
+        if clustered.all():
+            disposition, final = DISPOSITION_IN_CLUSTER, cluster
+        elif clustered.any():
+            disposition, final = DISPOSITION_ATTACHED, _nearest_clusters(seq, cluster)
+        elif len(seq) >= min_specimens:
+            disposition, final = DISPOSITION_SEQUENCE_ONLY, np.full(len(seq), next_id)
+            next_id += 1
+            only_count += 1
+            only_rows += len(seq)
+        else:
+            disposition, final = DISPOSITION_BELOW_FLOOR, cluster
+        new = (~clustered) & (final >= 0)
+        spids.extend(seq["spid"].to_numpy()[new])
+        clusters.extend(final[new])
+        attached.extend([disposition == DISPOSITION_ATTACHED] * int(new.sum()))
+        finals.append(pd.Series(final, index=seq.index))
+        table.append(_sequence_row(int(sid), seq, final, disposition))
+
+    spread_rows = rows[(rows["rule"] == RULE_SPREAD) & rows["candidate_sequence_id"].notna()]
+    for sid, seq in spread_rows.groupby("candidate_sequence_id", sort=True):
+        table.append(_sequence_row(int(sid), seq, np.full(len(seq), -1), DISPOSITION_SPREAD))
+
+    assignments = pd.DataFrame({
+        "spid": pd.Series(spids, dtype=object),
+        "spatiotemporal_cluster_id": pd.Series(clusters, dtype="int64"),
+        "attached": pd.Series(attached, dtype=bool),
+    })
+    assignments["cluster_join"] = JOIN_NUMBER
+    sequences = pd.DataFrame(table, columns=SEQUENCE_TABLE_COLUMNS)
+    if len(sequences):
+        spread = result.spread_km.reindex(sequences["collector_sequence_id"].to_numpy()).to_numpy()
+        sequences["spread_km"] = np.round(spread.astype(float), 1)
+        sequences = sequences.sort_values("collector_sequence_id", kind="stable").reset_index(drop=True)
+    in_seq["final_cluster"] = pd.concat(finals) if finals else pd.Series(dtype="int64")
+    return MergeResult(assignments=assignments, sequences=sequences, sequence_only_expeditions=only_count,
+                       sequence_only_rows=only_rows,
+                       sequence_rows=in_seq[["spid", "sequence_id", "coordinate_source", "final_cluster"]])
