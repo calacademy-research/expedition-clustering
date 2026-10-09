@@ -40,6 +40,12 @@ _geo_module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_geo_module)
 classify_expeditions = _geo_module.classify_expeditions
 
+_spec = importlib.util.spec_from_file_location("collector_sequences", _pkg_dir / "collector_sequences.py")
+_seq_module = importlib.util.module_from_spec(_spec)
+# Registered before it runs: its dataclasses look their module up by name.
+sys.modules["collector_sequences"] = _seq_module
+_spec.loader.exec_module(_seq_module)
+
 DEFAULT_INCOMING_DATA_DIR = Path("/Users/joe/collections_explorer/incoming_data")
 
 # Collection-specific spatial clustering distances (in km)
@@ -267,6 +273,15 @@ def main():
         help="Minimum merge score (0-1) required to execute a merge (default: auto per collection)",
     )
     parser.add_argument(
+        "--collector-sequences",
+        action="store_true",
+        help="Add botany collector-number sequences beside the spatial clusters (CAS Lens feature #922): "
+             "rows of one collector, numbers within 20 and days within 2 join the cluster of their "
+             "sequence's clustered rows, or form a sequence-only cluster of at least --min-specimens rows. "
+             "Needs one input that is a merged clustering input (coordinate_source column, CAS Lens #918). "
+             "Writes collector_sequences.csv and collector_sequences_summary.txt beside the output.",
+    )
+    parser.add_argument(
         "--no-merge",
         action="store_true",
         help="Disable the merge stage (only run initial DBSCAN clustering)",
@@ -299,6 +314,9 @@ def main():
     else:
         # Multiple inputs require explicit output
         parser.error("Must specify --output (-o) when using multiple inputs or --all")
+
+    if args.collector_sequences and len(inputs) != 1:
+        parser.error("--collector-sequences takes exactly one input collection")
 
     # Load data
     if len(inputs) == 1:
@@ -408,6 +426,19 @@ def main():
         clustered = clustered[clustered["spatiotemporal_cluster_id"].isin(valid_clusters)].copy()
         print(f"  Retained {len(valid_clusters)} clusters ({len(clustered)} specimens)")
 
+    # Collector-number sequences (CAS Lens feature #922, EXP-SEQ-2/4): the
+    # spatial clusters stay as they are; sequence rows in no cluster join the
+    # cluster of their sequence's clustered rows or form their own.
+    sequence_pass = None
+    if args.collector_sequences:
+        source = inputs[0] / "PortalData.csv" if inputs[0].is_dir() else inputs[0]
+        print(f"Building collector-number sequences from {source}...")
+        sequence_pass = _seq_module.run_sequence_pass(
+            clustered, df, _seq_module.read_sequence_columns(source), args.min_specimens)
+        clustered = sequence_pass.output
+        for line in sequence_pass.log_lines():
+            print(f"  {line}")
+
     # Identify multi-collection expeditions
     if "collection" in clustered.columns:
         # Count collections per cluster
@@ -473,6 +504,9 @@ def main():
     output.parent.mkdir(parents=True, exist_ok=True)
     clustered.to_csv(output, index=False)
     print(f"\nSaved to {output}")
+    if sequence_pass is not None:
+        sequence_pass.write_files(output.parent)
+        print(f"Saved {_seq_module.SEQUENCES_FILE} and {_seq_module.SUMMARY_FILE} to {output.parent}")
 
 
 if __name__ == "__main__":

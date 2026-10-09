@@ -660,3 +660,116 @@ def merge_with_clusters(result: SequenceResult, cluster_of: pd.Series, min_speci
     return MergeResult(assignments=assignments, sequences=sequences, sequence_only_expeditions=only_count,
                        sequence_only_rows=only_rows,
                        sequence_rows=in_seq[["spid", "sequence_id", "coordinate_source", "final_cluster"]])
+
+
+# ---------------------------------------------------------------- the output of a sequence run
+
+OUTPUT_COLUMNS = ("collector_number", "collector_number_series", "collector_sequence_id", "cluster_join")
+SEQUENCES_FILE = "collector_sequences.csv"
+SUMMARY_FILE = "collector_sequences_summary.txt"
+# The summary's key for each exclusion rule.
+RULE_KEYS = {
+    RULE_SN: "sn", RULE_UNPARSED: "unparsed_code", RULE_NO_DAY: "no_day", RULE_BEFORE_1890: "before_1890",
+    RULE_NONPERSONAL: "non_personal", RULE_NONSEQUENTIAL: "nonsequential", RULE_SPREAD: "spread",
+}
+
+
+@dataclass
+class SequencePass:
+    """run_sequence_pass' answer: the output frame and what it is made of."""
+
+    output: pd.DataFrame
+    result: SequenceResult
+    merge: MergeResult
+
+    def summary(self) -> dict[str, int]:
+        """The key=value pairs of SUMMARY_FILE (cas-lens PLAN §4.4)."""
+        excluded = self.result.excluded_counts()
+        out = {"rows_in_sequences": len(self.merge.sequence_rows)}
+        out.update({f"rows_in_sequences.{k}": v for k, v in self.merge.in_sequences_by_source().items()})
+        out["attached_rows"] = self.merge.attached_rows()
+        out.update({f"attached_rows.{k}": v for k, v in self.merge.attached_by_source().items()})
+        out["sequence_only_expeditions"] = self.merge.sequence_only_expeditions
+        out["sequence_only_rows"] = self.merge.sequence_only_rows
+        out["excluded_rows"] = sum(excluded.values())
+        out.update({f"excluded.{RULE_KEYS[r]}": n for r, n in excluded.items()})
+        out["alone_rows"] = self.result.alone_rows()
+        out["sequences"] = int(self.merge.sequences["disposition"].ne(DISPOSITION_SPREAD).sum())
+        out["reused_series_keys"] = len(self.result.reused_keys)
+        out["nonsequential_keys"] = len(self.result.nonsequential_keys)
+        return out
+
+    def log_lines(self) -> list[str]:
+        """The run's report (PFV-385); the weekly stage prints the same from the summary."""
+        s = self.summary()
+        excluded = ", ".join(f"{r} {s['excluded.' + RULE_KEYS[r]]}" for r in RULES)
+        return [
+            f"collector sequences: {s['rows_in_sequences']} rows in sequences, {s['attached_rows']} attached to "
+            f"clusters, {s['sequence_only_expeditions']} new sequence-only expeditions, "
+            f"{s['excluded_rows']} rows excluded by rule",
+            f"collector sequences excluded: {excluded}",
+            f"collector sequences by coordinate: in sequences specify {s['rows_in_sequences.specify']} / engine "
+            f"{s['rows_in_sequences.engine']} / none {s['rows_in_sequences.none']}; attached specify "
+            f"{s['attached_rows.specify']} / engine {s['attached_rows.engine']} / none {s['attached_rows.none']}",
+        ]
+
+    def write_files(self, directory: Path) -> None:
+        """SEQUENCES_FILE and SUMMARY_FILE into directory (beside clustered_expeditions.csv)."""
+        directory = Path(directory)
+        self.merge.sequences.to_csv(directory / SEQUENCES_FILE, index=False)
+        (directory / SUMMARY_FILE).write_text("".join(f"{k}={v}\n" for k, v in self.summary().items()))
+
+
+def read_sequence_columns(csv_path: Path) -> pd.DataFrame:
+    """RAW_COLUMNS of a merged clustering input, as text (prepare_rows checks them)."""
+    header = pd.read_csv(csv_path, nrows=0).columns
+    missing = [c for c in RAW_COLUMNS if c not in header]
+    if missing:
+        msg = (f"{csv_path} lacks column(s) {', '.join(missing)} that the collector-number sequences read "
+               "(coordinate_source comes from the merged input, CAS Lens bug #918)")
+        raise ValueError(msg)
+    return pd.read_csv(csv_path, usecols=list(RAW_COLUMNS), dtype=str, keep_default_na=False)
+
+
+def run_sequence_pass(clustered: pd.DataFrame, all_rows: pd.DataFrame, raw: pd.DataFrame,
+                      min_specimens: int) -> SequencePass:
+    """
+    The sequence pass of cluster_csv.py (PLAN §3-4, EXP-SEQ-4).
+
+    Inputs:  clustered -- the spatial clusters the run keeps (pipeline output
+             after the size floor; spid, spatiotemporal_cluster_id, ...);
+             all_rows -- every input row in pipeline format
+             (transform_csv_to_pipeline_format, before the coordinate / date
+             filter), from which the added rows are taken;
+             raw -- read_sequence_columns of the same input;
+             min_specimens -- the size floor.
+    Output:  SequencePass whose output is clustered plus the rows the
+             sequences add, every row carrying OUTPUT_COLUMNS: the parsed
+             number and series (empty when none), the sequence id (empty
+             when none) and cluster_join (spatial | collector_number).
+             Integer columns stay integers (Int64) across the added rows.
+    """
+    result = build_sequences(prepare_rows(raw))
+    cluster_of = pd.Series(clustered["spatiotemporal_cluster_id"].to_numpy(dtype="int64"),
+                           index=clustered["spid"].to_numpy())
+    merge = merge_with_clusters(result, cluster_of, min_specimens)
+
+    by_spid = all_rows.set_index("spid", drop=False)
+    added = by_spid.loc[merge.assignments["spid"].to_numpy()].reset_index(drop=True)
+    added["spatiotemporal_cluster_id"] = merge.assignments["spatiotemporal_cluster_id"].to_numpy()
+    added["cluster_join"] = JOIN_NUMBER
+    base = clustered.copy()
+    base["cluster_join"] = JOIN_SPATIAL
+    integer_columns = [c for c in base.columns if pd.api.types.is_integer_dtype(base[c])]
+    output = pd.concat([base, added], ignore_index=True)
+    for col in integer_columns:
+        output[col] = output[col].astype("Int64")
+
+    rows = result.rows.set_index("spid")
+    numbers = rows.loc[output["spid"].to_numpy()]
+    output["collector_number"] = pd.array(numbers["number"].to_numpy(), dtype="Int64")
+    output["collector_number_series"] = numbers["series"].where(output["collector_number"].notna().to_numpy(),
+                                                                "").to_numpy()
+    output["collector_sequence_id"] = numbers["sequence_id"].to_numpy()
+    output["collector_sequence_id"] = output["collector_sequence_id"].astype("Int64")
+    return SequencePass(output=output, result=result, merge=merge)
