@@ -108,6 +108,13 @@ def test_sequences_join_the_output(tmp_path):
     assert summary["excluded.sn"] == "3"
     assert summary["excluded.unparsed_code"] == "1"
     assert summary["rows_in_sequences.engine"] == "15"
+    # The ten unlocated Thomas rows are evidence for the engine; Breedlove's
+    # sequence has no located row and gives none (EXP-SEQ-7).
+    assert summary["evidence_rows"] == "10"
+    evidence = pd.read_csv(out_dir / "collector_sequence_evidence.csv", keep_default_na=False).set_index("spid")
+    assert sorted(evidence.index) == sorted(f"thomas-{n}" for n in range(31, 41))
+    assert evidence.loc["thomas-31", "neighbour_spid"] == "thomas-30"
+    assert evidence.loc["thomas-31", "neighbour_source"] == "engine"
 
 
 def test_without_the_flag_nothing_changes(tmp_path):

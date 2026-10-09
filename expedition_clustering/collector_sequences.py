@@ -666,6 +666,7 @@ def merge_with_clusters(result: SequenceResult, cluster_of: pd.Series, min_speci
 
 OUTPUT_COLUMNS = ("collector_number", "collector_number_series", "collector_sequence_id", "cluster_join")
 SEQUENCES_FILE = "collector_sequences.csv"
+EVIDENCE_FILE = "collector_sequence_evidence.csv"
 SUMMARY_FILE = "collector_sequences_summary.txt"
 # The summary's key for each exclusion rule.
 RULE_KEYS = {
@@ -681,6 +682,7 @@ class SequencePass:
     output: pd.DataFrame
     result: SequenceResult
     merge: MergeResult
+    evidence: pd.DataFrame
 
     def summary(self) -> dict[str, int]:
         """The key=value pairs of SUMMARY_FILE (cas-lens PLAN §4.4)."""
@@ -697,6 +699,7 @@ class SequencePass:
         out["sequences"] = int(self.merge.sequences["disposition"].ne(DISPOSITION_SPREAD).sum())
         out["reused_series_keys"] = len(self.result.reused_keys)
         out["nonsequential_keys"] = len(self.result.nonsequential_keys)
+        out["evidence_rows"] = len(self.evidence)
         return out
 
     def log_lines(self) -> list[str]:
@@ -714,9 +717,10 @@ class SequencePass:
         ]
 
     def write_files(self, directory: Path) -> None:
-        """SEQUENCES_FILE and SUMMARY_FILE into directory (beside clustered_expeditions.csv)."""
+        """SEQUENCES_FILE, EVIDENCE_FILE and SUMMARY_FILE into directory (beside clustered_expeditions.csv)."""
         directory = Path(directory)
         self.merge.sequences.to_csv(directory / SEQUENCES_FILE, index=False)
+        self.evidence.to_csv(directory / EVIDENCE_FILE, index=False)
         (directory / SUMMARY_FILE).write_text("".join(f"{k}={v}\n" for k, v in self.summary().items()))
 
 
@@ -772,4 +776,53 @@ def run_sequence_pass(clustered: pd.DataFrame, all_rows: pd.DataFrame, raw: pd.D
                                                                 "").to_numpy()
     output["collector_sequence_id"] = numbers["sequence_id"].to_numpy()
     output["collector_sequence_id"] = output["collector_sequence_id"].astype("Int64")
-    return SequencePass(output=output, result=result, merge=merge)
+    return SequencePass(output=output, result=result, merge=merge, evidence=evidence_rows(result))
+
+
+# ---------------------------------------------------------------- evidence for the georeference engine
+
+EVIDENCE_COLUMNS = ("spid", "collector_sequence_id", "collector_number", "date", "evidence_lat", "evidence_lng",
+                    "neighbour_spid", "neighbour_number_gap", "neighbour_day_gap", "neighbour_source",
+                    "sequence_spread_km")
+
+
+def evidence_rows(result: SequenceResult) -> pd.DataFrame:
+    """
+    Candidate places for sequence rows that have none (PLAN §4.3, EXP-SEQ-7).
+
+    Input:   build_sequences' answer.
+    Output:  one row per row of a sequence that passed every rule, with no
+             effective coordinate, whose sequence has a located row
+             (EVIDENCE_COLUMNS): the located row nearest in collector number,
+             then day, then spid; its coordinate and coordinate_source; the
+             number and day gaps; the sequence's robust spread (empty for one
+             located row). The engine reads it as evidence; it is never
+             written as the row's coordinate.
+    """
+    rows = result.rows
+    seq = rows[rows["sequence_id"].notna()]
+    located_ids = set(seq.loc[seq["lat"].notna(), "sequence_id"])
+    has_both = seq["sequence_id"].isin(located_ids) & seq.groupby("sequence_id")["lat"].transform(
+        lambda v: v.isna().any())
+    seq = seq[has_both].sort_values(["sequence_id", "spid"], kind="stable")
+    out = []
+    for sid, group in seq.groupby("sequence_id", sort=True):
+        located = group["lat"].notna().to_numpy()
+        num = group["number"].to_numpy(dtype=np.int64)
+        day = group["day"].to_numpy(dtype=np.int64)
+        todo = np.flatnonzero(~located)
+        cand = np.flatnonzero(located)
+        # Candidates are in spid order, so argmin's first hit breaks the last tie by spid.
+        score = (np.abs(num[todo, None] - num[None, cand]) * _NUMBER_WEIGHT
+                 + np.abs(day[todo, None] - day[None, cand]) * _DAY_WEIGHT)
+        best = cand[np.argmin(score, axis=1)]
+        spid = group["spid"].to_numpy()
+        lat, lng = group["lat"].to_numpy(dtype=float), group["lng"].to_numpy(dtype=float)
+        source = group["coordinate_source"].to_numpy()
+        for i, j in zip(todo, best, strict=True):
+            out.append((spid[i], int(sid), int(num[i]), _iso(day[i]), float(lat[j]), float(lng[j]), spid[j],
+                        int(abs(num[i] - num[j])), int(abs(day[i] - day[j])), source[j],
+                        result.spread_km.get(int(sid), np.nan)))
+    frame = pd.DataFrame(out, columns=list(EVIDENCE_COLUMNS))
+    frame["sequence_spread_km"] = frame["sequence_spread_km"].astype(float).round(1)
+    return frame
