@@ -198,6 +198,15 @@ def transform_csv_to_pipeline_format(
     result["latitude1"] = pd.to_numeric(df.get("latitude1"), errors="coerce")
     result["longitude1"] = pd.to_numeric(df.get("longitude1"), errors="coerce")
 
+    # Where the coordinates came from (CAS Lens bug #918, EXP-CLUSTER-8). The
+    # Lens weekly clustering stage passes a merged PortalData.csv whose
+    # latitude1/longitude1 are Specify's or, for a row without them, the
+    # locality engine's, naming which in coordinate_source (specify | engine |
+    # empty). Carried unchanged into clustered_expeditions.csv. A plain
+    # PortalData.csv has no such column and none is added.
+    if "coordinate_source" in df.columns:
+        result["coordinate_source"] = df["coordinate_source"].fillna("").astype(str)
+
     # CSV doesn't have centroid fallbacks, set to NaN
     result["centroidlat"] = pd.NA
     result["centroidlon"] = pd.NA
