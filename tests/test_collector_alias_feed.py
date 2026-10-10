@@ -9,6 +9,10 @@ share a canonical id. A key two people hold is left out and counted, never
 given to one of them. The alias file is then used by the collector partition
 and by the merge stage's collector overlap.
 
+Both orders of a "Last, First" name are looked up, as Lens resolves a name
+(NAME-ORDER-1): "Thomas, J. H." finds the alias "J. H. Thomas"; two orders
+naming two people name nobody.
+
 Requirements: EXP-ALIAS-4 .. EXP-ALIAS-6 (cas-lens docs/requirements/expedition-requirements.md).
 """
 
@@ -24,6 +28,7 @@ from expedition_clustering.pipeline import (
     MergeExpeditions,
     alias_coverage,
     alias_table_from_spellings,
+    collector_key,
     load_collector_aliases,
 )
 
@@ -239,3 +244,25 @@ def test_cluster_csv_prints_the_alias_coverage(tmp_path):
     # herp is collector-aware: the two spellings are one partition, one expedition.
     assert len(set(got["spatiotemporal_cluster_id"])) == 1
     assert set(got["collector_group"]) == {"@h-heath"}
+
+
+# ─── Both orders of a name (CAS Lens NAME-ORDER-1) ─────────────────────────
+
+
+def test_last_first_finds_the_first_last_alias():
+    aliases = {"j h thomas": "@j-h-thomas"}
+    # Lens holds "J. H. Thomas"; botany writes "Thomas, J. H.": one person.
+    assert collector_key("Thomas, J. H.", aliases) == "@j-h-thomas"
+    assert collector_key("J. H. Thomas", aliases) == "@j-h-thomas"
+
+
+def test_two_orders_naming_two_people_map_to_nobody():
+    aliases = {"baker f": "@f-baker-2", "f baker": "@f-baker"}
+    # Lens: "Baker, F." and "F. Baker" are two records, so the name is ambiguous.
+    assert collector_key("Baker, F.", aliases) == "baker f"
+
+
+def test_coverage_counts_a_name_found_in_the_other_order():
+    collectors = pd.Series(["Thomas, J. H.", "Nobody, A."])
+    cov = alias_coverage(collectors, {"j h thomas": "@j-h-thomas"})
+    assert (cov.names_resolved, cov.names) == (1, 2)

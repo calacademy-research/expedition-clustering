@@ -209,17 +209,44 @@ def parse_collector_string(collector_str: str) -> list[str]:
     return [re.sub(r"\s+", " ", c).strip() for c in collectors]
 
 
+def _other_order(name: str) -> str | None:
+    """"Thomas, J. H." -> "J. H. Thomas"; None for a name not in "Last, First" form."""
+    name = str(name).strip()
+    if not _looks_like_last_first_format(name):
+        return None
+    last, first = (part.strip() for part in name.split(",", 1))
+    return f"{first} {last}"
+
+
+def alias_id(name: str, aliases: dict[str, str] | None) -> str | None:
+    """
+    The alias table's id for one collector name, or None.
+
+    Both orders of a "Last, First" name are looked up ("Thomas, J. H." finds
+    the alias "J. H. Thomas"), as CAS Lens resolves a name (NAME-ORDER-1):
+    when the two orders give two ids the name names nobody (None), as Lens
+    leaves "Baker, F." unresolved when "F. Baker" is another record.
+    """
+    if not aliases:
+        return None
+    ids: list[str] = []
+    for form in (name, _other_order(name)):
+        if form is None:
+            continue
+        found = aliases.get(normalize_collector_name(form))
+        if found and found not in ids:
+            ids.append(found)
+    return ids[0] if len(ids) == 1 else None
+
+
 def collector_key(name: str, aliases: dict[str, str] | None = None) -> str:
     """
-    The key of one collector name: its alias table id when the table holds
-    its normalized name, else the normalized name ("H. Heath" -> "@h-heath"
-    with a CAS Lens alias table, "h heath" without). The partition and the
-    merge stage use this one rule (CAS Lens #378, EXP-ALIAS-6).
+    The key of one collector name: its alias table id (alias_id) when the
+    table holds it, else the normalized name ("H. Heath" -> "@h-heath" with a
+    CAS Lens alias table, "h heath" without). The partition and the merge
+    stage use this one rule (CAS Lens #378, EXP-ALIAS-6).
     """
-    norm = normalize_collector_name(name)
-    if aliases and norm in aliases:
-        return aliases[norm]
-    return norm
+    return alias_id(name, aliases) or normalize_collector_name(name)
 
 
 def create_collector_group_key(
@@ -413,19 +440,21 @@ class AliasCoverage:
 def alias_coverage(collectors: pd.Series, aliases: dict[str, str]) -> AliasCoverage:
     """
     Count the distinct collector names (parse_collector_string pieces, by
-    normalized name) the alias table holds, and the rows with a collector of
-    which at least one name it holds. Rows without a collector are not counted.
+    normalized name) the alias table resolves (alias_id: either order), and
+    the rows with a collector of which at least one name it resolves. Rows
+    without a collector are not counted.
     """
     names: set[str] = set()
     resolved: set[str] = set()
     rows = rows_resolved = 0
     for raw, n in collectors.dropna().value_counts().items():
-        keys = {normalize_collector_name(c) for c in parse_collector_string(raw)} - {"unknown"}
-        if not keys:
+        pieces = {normalize_collector_name(c): c for c in parse_collector_string(raw)}
+        pieces.pop("unknown", None)
+        if not pieces:
             continue
         rows += n
-        names |= keys
-        hit = {k for k in keys if k in aliases}
+        names |= set(pieces)
+        hit = {k for k, c in pieces.items() if alias_id(c, aliases)}
         resolved |= hit
         if hit:
             rows_resolved += n
