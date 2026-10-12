@@ -32,6 +32,8 @@ list_available_collections = _csv_module.list_available_collections
 
 _spec = importlib.util.spec_from_file_location("pipeline", _pkg_dir / "pipeline.py")
 _pipeline_module = importlib.util.module_from_spec(_spec)
+# Registered so worker processes (--jobs) can unpickle its functions by name.
+sys.modules["pipeline"] = _pipeline_module
 _spec.loader.exec_module(_pipeline_module)
 create_pipeline = _pipeline_module.create_pipeline
 
@@ -282,6 +284,12 @@ def main():
              "Writes collector_sequences.csv and collector_sequences_summary.txt beside the output.",
     )
     parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="Worker processes for the per-group spatial DBSCAN calls (default 1). The result does not depend on it.",
+    )
+    parser.add_argument(
         "--no-merge",
         action="store_true",
         help="Disable the merge stage (only run initial DBSCAN clustering)",
@@ -410,6 +418,7 @@ def main():
         merge_distance_km=merge_distance_km,
         merge_threshold=merge_threshold,
         enable_merge=enable_merge,
+        n_jobs=args.jobs,
     )
     clustered = pipeline.fit_transform(df_valid)
 
