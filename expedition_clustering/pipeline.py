@@ -2,6 +2,7 @@ import logging
 import math
 import re
 import unicodedata
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +22,186 @@ MIN_COLLECTOR_NAME_LEN = 2
 MAX_LAST_NAME_WORDS = 3
 # Two dated specimens are the fewest that have a gap between them.
 MIN_DATES_FOR_GAP = 2
+
+
+# ---------------------------------------------------------------------------
+# Group kernels (CAS Lens weekly clustering, 2026-10-11).
+#
+# The stages below used to visit each group with `mask = X[col] == gid` and
+# `X.loc[mask, ...]`: a full scan and a full-width copy of the frame per group,
+# so their cost was (number of groups) x (number of rows) -- 121,501 collector
+# partitions x 1.29M rows for botany after #918. These helpers give the same
+# labels and ids from row positions found once per stage.
+# ---------------------------------------------------------------------------
+
+def _dbscan_haversine_batch(coords_list, eps_rad):
+    """
+    Inputs:  coords_list -- list of (n_i, 2) arrays of [lat, lon] in radians;
+             eps_rad -- DBSCAN eps in radians.
+    Output:  list of label arrays, DBSCAN(min_samples=1, haversine, ball_tree)
+             per array (the call every stage made before).
+    """
+    return [
+        DBSCAN(eps=eps_rad, min_samples=1, metric="haversine", algorithm="ball_tree").fit_predict(c)
+        for c in coords_list
+    ]
+
+
+# DBSCAN labels by (eps, coordinates): a pure function of its key, so a hit is
+# exact. The reconnect, disconnect-statistics and validation passes run the same
+# groups again (1.47M calls for 0.5M distinct groups on botany). Cleared at the
+# start of each SpatialDBSCAN.transform to bound memory.
+_LABEL_CACHE: dict = {}
+
+
+def haversine_components(coords_rad, groups, eps_rad, n_jobs=1, chunk=2000):
+    """
+    Spatial DBSCAN labels for many groups.
+
+    Inputs:  coords_rad -- (N, 2) array, [lat, lon] radians, all rows;
+             groups -- list of integer row-position arrays, one per group;
+             eps_rad -- eps in radians; n_jobs -- worker processes (1 = serial);
+             chunk -- groups per worker task.
+    Output:  list of label arrays aligned with groups, equal to DBSCAN's.
+    Groups of one row, or whose points are all identical (distance 0 <= eps),
+    form one component: label 0 without calling DBSCAN (what DBSCAN returns).
+    Workers only compute labels; callers assign ids serially in group order,
+    so the result does not depend on n_jobs.
+    """
+    labels = [None] * len(groups)
+    todo = []
+    for k, idx in enumerate(groups):
+        if len(idx) == 1:
+            labels[k] = np.zeros(1, dtype=np.int64)
+            continue
+        c = coords_rad[idx]
+        if (c == c[0]).all():
+            labels[k] = np.zeros(len(idx), dtype=np.int64)
+            continue
+        hit = _LABEL_CACHE.get((eps_rad, c.tobytes()))
+        if hit is not None:
+            labels[k] = hit
+            continue
+        todo.append(k)
+    batches = [todo[i:i + chunk] for i in range(0, len(todo), chunk)]
+    if n_jobs > 1 and len(batches) > 1:
+        with ProcessPoolExecutor(n_jobs) as pool:
+            futures = [pool.submit(_dbscan_haversine_batch, [coords_rad[groups[k]] for k in b], eps_rad)
+                       for b in batches]
+            results = [f.result() for f in futures]
+    else:
+        results = [_dbscan_haversine_batch([coords_rad[groups[k]] for k in b], eps_rad) for b in batches]
+    for b, res in zip(batches, results, strict=True):
+        for k, lab in zip(b, res, strict=True):
+            labels[k] = lab
+            _LABEL_CACHE[(eps_rad, coords_rad[groups[k]].tobytes())] = lab
+    return labels
+
+
+def temporal_components(group_codes, days, eps_days):
+    """
+    Temporal DBSCAN labels for every group at once.
+
+    Inputs:  group_codes -- (N,) integer group code per row;
+             days -- (N,) float day numbers; eps_days -- eps in days.
+    Output:  (N,) int64 labels equal to DBSCAN(eps_days, min_samples=1,
+             euclidean) run on each group separately.
+    With min_samples=1 every point is a core point, so DBSCAN's clusters are
+    the chains of points with steps <= eps: sort by (group, day) and start a
+    new component where the group changes or the step exceeds eps. DBSCAN
+    numbers a group's components 0, 1, ... in the order of their first row,
+    so components are ranked inside their group by their smallest position.
+    """
+    n = len(days)
+    if n == 0:
+        return np.zeros(0, dtype=np.int64)
+    pos = np.arange(n)
+    order = np.lexsort((pos, days, group_codes))
+    g = group_codes[order]
+    d = days[order]
+    new = np.ones(n, dtype=bool)
+    new[1:] = (g[1:] != g[:-1]) | ((d[1:] - d[:-1]) > eps_days)
+    comp_sorted = np.cumsum(new) - 1
+    comp = np.empty(n, dtype=np.int64)
+    comp[order] = comp_sorted
+    ncomp = comp_sorted[-1] + 1
+    first = np.full(ncomp, n, dtype=np.int64)
+    np.minimum.at(first, comp, pos)
+    comp_group = np.empty(ncomp, dtype=group_codes.dtype)
+    comp_group[comp] = group_codes
+    o = np.lexsort((first, comp_group))
+    starts = np.ones(ncomp, dtype=bool)
+    starts[1:] = comp_group[o][1:] != comp_group[o][:-1]
+    idx = np.arange(ncomp)
+    group_start = np.maximum.accumulate(np.where(starts, idx, 0))
+    rank = np.empty(ncomp, dtype=np.int64)
+    rank[o] = idx - group_start
+    return rank[comp]
+
+
+def _day_numbers(X):
+    """Input: frame with startdate. Output: (N,) float day numbers (what the stages fed DBSCAN)."""
+    return X["startdate"].to_numpy(dtype="datetime64[D]").astype(float)
+
+
+def _group_codes(values):
+    """Input: array-like of group keys. Output: (N,) int64 codes (any labelling)."""
+    return pd.factorize(np.asarray(values), sort=False)[0].astype(np.int64)
+
+
+def _haversine_labels(X, keycols, e_dist, n_jobs):
+    """
+    Inputs:  X; keycols -- grouping column(s); e_dist km; n_jobs.
+    Output:  (N,) per-row spatial component label inside its group (0 = the
+             component of the group's first row).
+    """
+    coords = np.radians(X[["latitude1", "longitude1"]].astype(float).to_numpy())
+    groups = list(X.groupby(keycols).indices.values())
+    labels = np.zeros(len(X), dtype=np.int64)
+    for idx, lab in zip(groups, haversine_components(coords, groups, e_dist / 6371, n_jobs), strict=True):
+        labels[idx] = lab
+    return labels
+
+
+def _split_new_ids(keys, labels, next_id):
+    """
+    New ids for the split-off components of the reconnect stages.
+
+    Inputs:  keys -- (N,) group key per row (a scalar id, or a structured
+             tuple for two columns); labels -- (N,) component label per row
+             (0 keeps the group's id); next_id -- first free id.
+    Output:  (N,) ids: groups are taken in ascending key order (groupby's
+             order), components 1..k-1 of each in label order, each taking
+             the next free id -- the order the per-group loops used.
+    """
+    ids = np.array(keys, copy=True)
+    sel = labels > 0
+    if not sel.any():
+        return ids, sel, None
+    ukeys, inv = np.unique(keys[sel], return_inverse=True)
+    extra = np.zeros(len(ukeys), dtype=np.int64)
+    np.maximum.at(extra, inv, labels[sel])
+    offset = np.concatenate([[0], np.cumsum(extra)[:-1]])
+    return ids, sel, next_id + offset[inv] + labels[sel] - 1
+
+
+def _disconnected(X, e_dist, e_days, n_jobs):
+    """
+    Inputs:  X with spatiotemporal_cluster_id; e_dist km; e_days days.
+    Output:  (spatial_bad, temporal_bad): lists of (id, components, size) in
+             ascending id order -- the clusters that are not one spatial /
+             one temporal component.
+    """
+    st = X["spatiotemporal_cluster_id"].to_numpy()
+    sizes = pd.Series(st).value_counts()
+    spatial = _haversine_labels(X, "spatiotemporal_cluster_id", e_dist, n_jobs)
+    temporal = temporal_components(_group_codes(st), _day_numbers(X), float(e_days))
+    out = []
+    for lab in (spatial, temporal):
+        sel = lab > 0
+        comps = pd.Series(lab[sel]).groupby(st[sel]).max().sort_index()
+        out.append([(int(i), int(k) + 1, int(sizes[i])) for i, k in comps.items()])
+    return out[0], out[1]
 # How much of a collecting date is known, on Specify's scale: 1 the day,
 # 2 the month, 3 the year (bug #427).
 DATE_PRECISIONS = frozenset({1, 2, 3})
@@ -352,19 +533,30 @@ def measure_collector_coherence(
     if collector_col not in df.columns or cluster_col not in df.columns:
         return 0.5  # neutral default
 
-    single_collector = 0
-    total = 0
-
-    for _, group in df.groupby(cluster_col):
-        total += 1
-        collectors = set()
-        for raw in group[collector_col].dropna():
-            parsed = parse_collector_string(str(raw))
-            for c in parsed:
-                collectors.add(normalize_collector_name(c))
-        collectors.discard("unknown")
-        if len(collectors) <= 1:
-            single_collector += 1
+    # Each distinct collector string is parsed once; a cluster is
+    # single-collector when the union of its rows' names, without "unknown",
+    # has at most one name.
+    ids = df[cluster_col].to_numpy()
+    keep = pd.notna(ids)
+    raw = df[collector_col].to_numpy()[keep]
+    ids = ids[keep]
+    total = len(pd.unique(ids))
+    names_of = {}
+    pair_ids, pair_names = [], []
+    for cid, raw_value in zip(ids, raw, strict=True):
+        if raw_value is None or raw_value is pd.NA or (isinstance(raw_value, float) and math.isnan(raw_value)):
+            continue
+        value = str(raw_value)
+        names = names_of.get(value)
+        if names is None:
+            names = names_of[value] = tuple(
+                {normalize_collector_name(c) for c in parse_collector_string(value)} - {"unknown"})
+        for name in names:
+            pair_ids.append(cid)
+            pair_names.append(name)
+    pairs = pd.DataFrame({"id": pair_ids, "name": pair_names}).drop_duplicates()
+    multi = int((pairs.groupby("id").size() > 1).sum()) if len(pairs) else 0
+    single_collector = total - multi
 
     return single_collector / total if total > 0 else 0.5
 
@@ -636,9 +828,13 @@ class CollectorPartitioning(BaseEstimator, TransformerMixin):
 
         # Extract primary collector (for display) and collector group key (for clustering)
         if self.collector_col in X.columns:
-            X["primary_collector"] = X[self.collector_col].apply(extract_primary_collector)
+            # One call per distinct collector string (same values as a per-row apply)
+            codes, uniques = pd.factorize(X[self.collector_col], use_na_sentinel=False)
+            primary = np.array([extract_primary_collector(u) for u in uniques] + [None], dtype=object)
+            group = np.array([self._resolve_collector_group(u) for u in uniques] + [None], dtype=object)
+            X["primary_collector"] = primary[codes]
             # Use collector GROUP key for partitioning (handles multi-collector properly)
-            X["collector_group"] = X[self.collector_col].apply(self._resolve_collector_group)
+            X["collector_group"] = group[codes]
         else:
             X["primary_collector"] = "unknown"
             X["collector_group"] = "unknown"
@@ -665,10 +861,14 @@ class SpatialDBSCAN(BaseEstimator, TransformerMixin):
 
     If collector_partition column exists, clustering is done separately
     within each partition to prevent merging different collectors.
+    Partitions are visited in order of first appearance; each partition's
+    labels are offset by the ids already used. n_jobs > 1 computes the
+    per-partition DBSCAN labels in worker processes (same result).
     """
 
-    def __init__(self, e_dist):
+    def __init__(self, e_dist, n_jobs=1):
         self.e_dist = e_dist
+        self.n_jobs = n_jobs
 
     def fit(self, X, y=None):
         return self
@@ -680,33 +880,20 @@ class SpatialDBSCAN(BaseEstimator, TransformerMixin):
         X["longitude1"] = pd.to_numeric(X["longitude1"], errors="coerce")
 
         eps_rad = self.e_dist / 6371  # Convert e_dist to radians
+        _LABEL_CACHE.clear()
 
         # Check if we have collector partitions
         if "collector_partition" in X.columns and len(X["collector_partition"].dropna().unique()) > 1:
-            # Cluster within each partition, ensuring unique IDs across partitions
-            X["spatial_cluster_id"] = -1
+            coords = np.radians(X[["latitude1", "longitude1"]].values)
+            positions = X.groupby("collector_partition", sort=False).indices
+            groups = [positions[k] for k in X["collector_partition"].unique() if k in positions]
+            out = np.full(len(X), -1, dtype=np.int64)
             next_cluster_id = 0
-
-            for partition_id in X["collector_partition"].unique():
-                mask = X["collector_partition"] == partition_id
-                partition_data = X.loc[mask]
-
-                if len(partition_data) == 0:
-                    continue
-
-                coords = np.radians(partition_data[["latitude1", "longitude1"]].values)
-
-                db = DBSCAN(
-                    eps=eps_rad,
-                    min_samples=1,
-                    metric="haversine",
-                    algorithm="ball_tree",
-                )
-                labels = db.fit_predict(coords)
-
+            for idx, labels in zip(groups, haversine_components(coords, groups, eps_rad, self.n_jobs), strict=True):
                 # Offset labels to ensure uniqueness across partitions
-                X.loc[mask, "spatial_cluster_id"] = labels + next_cluster_id
+                out[idx] = labels + next_cluster_id
                 next_cluster_id += labels.max() + 1
+            X["spatial_cluster_id"] = out
         else:
             # Standard behavior - cluster all together
             coords = np.radians(X[["latitude1", "longitude1"]].values)
@@ -724,6 +911,8 @@ class SpatialDBSCAN(BaseEstimator, TransformerMixin):
 
 # Step 3: Custom Transformer for Temporal DBSCAN Clustering
 class TemporalDBSCAN(BaseEstimator, TransformerMixin):
+    """Temporal DBSCAN (min_samples=1) inside each spatial cluster, all clusters at once."""
+
     def __init__(self, e_days):
         self.e_days = e_days
 
@@ -732,24 +921,8 @@ class TemporalDBSCAN(BaseEstimator, TransformerMixin):
 
     def transform(self, X):
         X = X.copy()
-
-        # Initialize to noise; we will fill per spatial cluster
-        X["temporal_cluster_id"] = -1
-        eps_days = float(self.e_days)
-
-        for spatial_id in X["spatial_cluster_id"].unique():
-            mask = X["spatial_cluster_id"] == spatial_id
-            times = X.loc[mask, "startdate"].values.astype("datetime64[D]").astype(float).reshape(-1, 1)
-
-            db = DBSCAN(
-                eps=eps_days,
-                min_samples=1,
-                metric="euclidean",
-                algorithm="ball_tree",
-            )
-            temporal_labels = db.fit_predict(times)
-            X.loc[mask, "temporal_cluster_id"] = temporal_labels
-
+        X["temporal_cluster_id"] = temporal_components(
+            _group_codes(X["spatial_cluster_id"]), _day_numbers(X), float(self.e_days))
         return X
 
 
@@ -785,9 +958,10 @@ class ValidateSpatiotemporalConnectivity(BaseEstimator, TransformerMixin):
     Raises ValueError if any cluster fails the connectivity checks.
     """
 
-    def __init__(self, e_dist, e_days):
+    def __init__(self, e_dist, e_days, n_jobs=1):
         self.e_dist = e_dist
         self.e_days = e_days
+        self.n_jobs = n_jobs
 
     def fit(self, X, y=None):
         return self
@@ -797,36 +971,7 @@ class ValidateSpatiotemporalConnectivity(BaseEstimator, TransformerMixin):
         if "spatiotemporal_cluster_id" not in X.columns:
             raise ValueError("Missing spatiotemporal_cluster_id after iteration; pipeline state is invalid.")
 
-        eps_rad = self.e_dist / 6371
-        time_eps = float(self.e_days)
-        spatial_bad = []
-        temporal_bad = []
-
-        for stc_id, sub in X.groupby("spatiotemporal_cluster_id"):
-            if len(sub) <= 1:
-                continue
-            coords = np.radians(sub[["latitude1", "longitude1"]].astype(float).to_numpy())
-            labels = DBSCAN(
-                eps=eps_rad,
-                min_samples=1,
-                metric="haversine",
-                algorithm="ball_tree",
-            ).fit_predict(coords)
-            if labels.max() > 0:
-                spatial_bad.append((stc_id, int(labels.max() + 1), len(sub)))
-
-            # Temporal connectivity on 1D day offsets
-            times = sub["startdate"].to_numpy(dtype="datetime64[D]").astype(float).reshape(-1, 1)
-            if np.isnan(times).all():
-                continue
-            t_labels = DBSCAN(
-                eps=time_eps,
-                min_samples=1,
-                metric="euclidean",
-                algorithm="ball_tree",
-            ).fit_predict(times)
-            if t_labels.max() > 0:
-                temporal_bad.append((stc_id, int(t_labels.max() + 1), len(sub)))
+        spatial_bad, temporal_bad = _disconnected(X, self.e_dist, self.e_days, self.n_jobs)
 
         if spatial_bad or temporal_bad:
             parts = []
@@ -851,73 +996,34 @@ class SpatialReconnectWithinTemporal(BaseEstimator, TransformerMixin):
     disconnected blobs, then update spatial_cluster_id accordingly.
     """
 
-    def __init__(self, e_dist):
+    def __init__(self, e_dist, n_jobs=1):
         self.e_dist = e_dist
+        self.n_jobs = n_jobs
 
     def fit(self, X, y=None):
         return self
 
     def transform(self, X):
         X = X.copy()
-        eps_rad = self.e_dist / 6371
-        labels = X["spatial_cluster_id"].to_numpy()
-        next_label = int(labels.max()) + 1 if labels.size else 0
-
-        for (_sp_id, _t_id), sub in X.groupby(["spatial_cluster_id", "temporal_cluster_id"]):
-            if len(sub) <= 1:
-                continue
-            coords = np.radians(sub[["latitude1", "longitude1"]].astype(float).to_numpy())
-            comp_labels = DBSCAN(
-                eps=eps_rad,
-                min_samples=1,
-                metric="haversine",
-                algorithm="ball_tree",
-            ).fit_predict(coords)
-            unique = np.unique(comp_labels)
-            if len(unique) == 1:
-                continue
-
-            base = unique[0]
-            idxs = sub.index.to_numpy()
-            for comp in unique:
-                comp_rows = idxs[comp_labels == comp]
-                if comp == base:
-                    continue
-                X.loc[comp_rows, "spatial_cluster_id"] = next_label
-                next_label += 1
-
+        sp = X["spatial_cluster_id"].to_numpy().astype(np.int64)
+        tc = X["temporal_cluster_id"].to_numpy().astype(np.int64)
+        next_label = int(sp.max()) + 1 if sp.size else 0
+        labels = _haversine_labels(X, ["spatial_cluster_id", "temporal_cluster_id"], self.e_dist, self.n_jobs)
+        # One integer key per (spatial, temporal) pair that sorts like the pair (both are >= 0).
+        key = sp * (int(tc.max()) + 1) + tc if sp.size else sp
+        _, sel, new = _split_new_ids(key, labels, next_label)
+        if new is not None:
+            sp = sp.copy()
+            sp[sel] = new
+            X["spatial_cluster_id"] = sp
         return X
 
 
-class TemporalDBSCANRecompute(BaseEstimator, TransformerMixin):
+class TemporalDBSCANRecompute(TemporalDBSCAN):
     """
     Recompute temporal DBSCAN per spatial cluster (after any spatial splitting)
     to ensure temporal labels reflect the final spatial partitions.
     """
-
-    def __init__(self, e_days):
-        self.e_days = e_days
-
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X):
-        X = X.copy()
-        X["temporal_cluster_id"] = -1
-        eps_days = float(self.e_days)
-
-        for spatial_id in X["spatial_cluster_id"].unique():
-            mask = X["spatial_cluster_id"] == spatial_id
-            times = X.loc[mask, "startdate"].values.astype("datetime64[D]").astype(float).reshape(-1, 1)
-            db = DBSCAN(
-                eps=eps_days,
-                min_samples=1,
-                metric="euclidean",
-                algorithm="ball_tree",
-            )
-            labels = db.fit_predict(times)
-            X.loc[mask, "temporal_cluster_id"] = labels
-        return X
 
 
 class SpatialReconnectWithinSpatiotemporal(BaseEstimator, TransformerMixin):
@@ -926,8 +1032,9 @@ class SpatialReconnectWithinSpatiotemporal(BaseEstimator, TransformerMixin):
     if not, split into new spatiotemporal IDs per spatial component.
     """
 
-    def __init__(self, e_dist):
+    def __init__(self, e_dist, n_jobs=1):
         self.e_dist = e_dist
+        self.n_jobs = n_jobs
 
     def fit(self, X, y=None):
         return self
@@ -936,30 +1043,13 @@ class SpatialReconnectWithinSpatiotemporal(BaseEstimator, TransformerMixin):
         X = X.copy()
         if "spatiotemporal_cluster_id" not in X.columns:
             return X
-        eps_rad = self.e_dist / 6371
-        next_id = int(X["spatiotemporal_cluster_id"].max()) + 1 if len(X) else 0
-
-        for _stc_id, sub in X.groupby("spatiotemporal_cluster_id"):
-            if len(sub) <= 1:
-                continue
-            coords = np.radians(sub[["latitude1", "longitude1"]].astype(float).to_numpy())
-            labels = DBSCAN(
-                eps=eps_rad,
-                min_samples=1,
-                metric="haversine",
-                algorithm="ball_tree",
-            ).fit_predict(coords)
-            unique = np.unique(labels)
-            if len(unique) == 1:
-                continue
-            base = unique[0]
-            idxs = sub.index.to_numpy()
-            for comp in unique:
-                comp_rows = idxs[labels == comp]
-                if comp == base:
-                    continue
-                X.loc[comp_rows, "spatiotemporal_cluster_id"] = next_id
-                next_id += 1
+        st = X["spatiotemporal_cluster_id"].to_numpy()
+        next_id = int(st.max()) + 1 if len(X) else 0
+        labels = _haversine_labels(X, "spatiotemporal_cluster_id", self.e_dist, self.n_jobs)
+        ids, sel, new = _split_new_ids(st, labels, next_id)
+        if new is not None:
+            ids[sel] = new
+            X["spatiotemporal_cluster_id"] = ids
         return X
 
 
@@ -979,30 +1069,13 @@ class TemporalReconnectWithinSpatiotemporal(BaseEstimator, TransformerMixin):
         X = X.copy()
         if "spatiotemporal_cluster_id" not in X.columns:
             return X
-        eps_days = float(self.e_days)
-        next_id = int(X["spatiotemporal_cluster_id"].max()) + 1 if len(X) else 0
-
-        for _stc_id, sub in X.groupby("spatiotemporal_cluster_id"):
-            if len(sub) <= 1:
-                continue
-            times = sub["startdate"].to_numpy(dtype="datetime64[D]").astype(float).reshape(-1, 1)
-            labels = DBSCAN(
-                eps=eps_days,
-                min_samples=1,
-                metric="euclidean",
-                algorithm="ball_tree",
-            ).fit_predict(times)
-            unique = np.unique(labels)
-            if len(unique) == 1:
-                continue
-            base = unique[0]
-            idxs = sub.index.to_numpy()
-            for comp in unique:
-                comp_rows = idxs[labels == comp]
-                if comp == base:
-                    continue
-                X.loc[comp_rows, "spatiotemporal_cluster_id"] = next_id
-                next_id += 1
+        st = X["spatiotemporal_cluster_id"].to_numpy()
+        next_id = int(st.max()) + 1 if len(X) else 0
+        labels = temporal_components(_group_codes(st), _day_numbers(X), float(self.e_days))
+        ids, sel, new = _split_new_ids(st, labels, next_id)
+        if new is not None:
+            ids[sel] = new
+            X["spatiotemporal_cluster_id"] = ids
         return X
 
 
@@ -1012,19 +1085,20 @@ class IterativeSpatiotemporalClustering(BaseEstimator, TransformerMixin):
     no spatial or temporal disconnects remain (or max_iter is reached).
     """
 
-    def __init__(self, e_dist, e_days, max_iter=5):
+    def __init__(self, e_dist, e_days, max_iter=5, n_jobs=1):
         self.e_dist = e_dist
         self.e_days = e_days
         self.max_iter = max_iter
+        self.n_jobs = n_jobs
 
         # Reuse the existing components
         self.temporal_dbscan = TemporalDBSCAN(e_days=e_days)
-        self.spatial_reconnect = SpatialReconnectWithinTemporal(e_dist=e_dist)
+        self.spatial_reconnect = SpatialReconnectWithinTemporal(e_dist=e_dist, n_jobs=n_jobs)
         self.temporal_recompute = TemporalDBSCANRecompute(e_days=e_days)
         self.combiner = CombineClusters()
-        self.spatial_reconnect_st = SpatialReconnectWithinSpatiotemporal(e_dist=e_dist)
+        self.spatial_reconnect_st = SpatialReconnectWithinSpatiotemporal(e_dist=e_dist, n_jobs=n_jobs)
         self.temporal_reconnect_st = TemporalReconnectWithinSpatiotemporal(e_days=e_days)
-        self.validator = ValidateSpatiotemporalConnectivity(e_dist=e_dist, e_days=e_days)
+        self.validator = ValidateSpatiotemporalConnectivity(e_dist=e_dist, e_days=e_days, n_jobs=n_jobs)
 
     def fit(self, X, y=None):
         return self
@@ -1071,35 +1145,11 @@ class IterativeSpatiotemporalClustering(BaseEstimator, TransformerMixin):
         return X
 
     def _disconnect_stats(self, X):
-        eps_rad = self.e_dist / 6371
-        time_eps = float(self.e_days)
-        spatial_bad = []
-        temporal_bad = []
+        """Output: (spatial_bad ids, temporal_bad ids) -- for the pass log line."""
         if "spatiotemporal_cluster_id" not in X.columns:
-            return spatial_bad, temporal_bad
-        for stc_id, sub in X.groupby("spatiotemporal_cluster_id"):
-            if len(sub) <= 1:
-                continue
-            coords = np.radians(sub[["latitude1", "longitude1"]].astype(float).to_numpy())
-            labels = DBSCAN(
-                eps=eps_rad,
-                min_samples=1,
-                metric="haversine",
-                algorithm="ball_tree",
-            ).fit_predict(coords)
-            if labels.max() > 0:
-                spatial_bad.append(stc_id)
-
-            times = sub["startdate"].to_numpy(dtype="datetime64[D]").astype(float).reshape(-1, 1)
-            t_labels = DBSCAN(
-                eps=time_eps,
-                min_samples=1,
-                metric="euclidean",
-                algorithm="ball_tree",
-            ).fit_predict(times)
-            if t_labels.max() > 0:
-                temporal_bad.append(stc_id)
-        return spatial_bad, temporal_bad
+            return [], []
+        spatial_bad, temporal_bad = _disconnected(X, self.e_dist, self.e_days, self.n_jobs)
+        return [c[0] for c in spatial_bad], [c[0] for c in temporal_bad]
 
 
 class MergeExpeditions(BaseEstimator, TransformerMixin):
@@ -1137,6 +1187,16 @@ class MergeExpeditions(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
+        """
+        Inputs:  X with spatiotemporal_cluster_id, startdate, latitude1,
+                 longitude1, date_precision, collectors.
+        Output:  X with merged spatiotemporal_cluster_id.
+        Each cluster's rows are kept as a position array that merges update,
+        so validating a candidate and executing a merge touch only the two
+        clusters' rows; a round rebuilds the summaries of the clusters the
+        previous round changed (the others are unchanged); each distinct
+        collector string is parsed once.
+        """
         X = X.copy()
         logger = logging.getLogger(__name__)
 
@@ -1147,13 +1207,61 @@ class MergeExpeditions(BaseEstimator, TransformerMixin):
         collector_coherence = measure_collector_coherence(X)
         logger.info("Merge stage: collector_coherence=%.3f", collector_coherence)
 
+        ids = X["spatiotemporal_cluster_id"].to_numpy().copy()
+        lat = X["latitude1"].astype(float).to_numpy()
+        lon = X["longitude1"].astype(float).to_numpy()
+        dates = pd.to_datetime(X["startdate"]).to_numpy(dtype="datetime64[ns]")
+        precision = X["date_precision"].to_numpy()
+        collectors = X["collectors"].to_numpy() if "collectors" in X.columns else None
+        members = dict(pd.Series(ids).groupby(ids).indices)
+        parsed_cache = {}
+
+        def parsed(raw):
+            """Raw collector string -> (normalized names, vessel), computed once per string."""
+            hit = parsed_cache.get(raw)
+            if hit is None:
+                names = tuple(normalize_collector_name(c) for c in parse_collector_string(raw))
+                hit = parsed_cache[raw] = (names, extract_vessel(raw))
+            return hit
+
+        def summary(exp_id):
+            """_build_expedition_summary of one cluster, from the arrays (rows in input order)."""
+            idx = np.sort(members[exp_id])
+            d = dates[idx]
+            d = d[~np.isnat(d)]
+            start = pd.Timestamp(d.min()) if len(d) else pd.NaT
+            end = pd.Timestamp(d.max()) if len(d) else pd.NaT
+            names, vessel = set(), None
+            if collectors is not None:
+                for raw in collectors[idx]:
+                    if raw is None or raw is pd.NA or (isinstance(raw, float) and math.isnan(raw)):
+                        continue
+                    found, v = parsed(str(raw))
+                    names.update(n for n in found if n != "unknown")
+                    if vessel is None:
+                        vessel = v
+            return _ExpeditionSummary(
+                expedition_id=exp_id,
+                specimen_count=len(idx),
+                start_date=start,
+                end_date=end,
+                centroid_lat=lat[idx].mean(),
+                centroid_lon=lon[idx].mean(),
+                collectors=names,
+                vessel=vessel,
+                year=start.year if pd.notna(start) else 0,
+                date_precision=int(precision[idx].max()),
+            )
+
         total_merges = 0
+        summaries = {}
+        changed = set(members)
 
         for iteration in range(1, self.max_iterations + 1):
-            # Build summaries for all current expeditions
-            summaries = {}
-            for exp_id, group in X.groupby("spatiotemporal_cluster_id"):
-                summaries[exp_id] = _build_expedition_summary(exp_id, group)
+            # Summaries for all current expeditions, in ascending id order (groupby's order)
+            for exp_id in changed:
+                summaries[exp_id] = summary(exp_id)
+            summaries = {k: summaries[k] for k in sorted(members)}
 
             # Find and score merge candidates
             candidates = self._find_candidates(summaries, collector_coherence)
@@ -1167,6 +1275,7 @@ class MergeExpeditions(BaseEstimator, TransformerMixin):
 
             # Execute merges greedily
             merged_this_round = set()
+            changed = set()
             round_merges = 0
 
             for candidate in candidates:
@@ -1179,18 +1288,20 @@ class MergeExpeditions(BaseEstimator, TransformerMixin):
                 if a_id in merged_this_round or b_id in merged_this_round:
                     continue
 
+                rows = np.concatenate([members[a_id], members[b_id]])
                 # Validate: merged expedition must not have internal gaps > max_gap_days
-                if not self._validate_merge(X, candidate):
+                if not self._validate_merge_rows(dates[rows], candidate):
                     continue
 
                 # Execute: reassign B's specimens to A's cluster
-                X.loc[
-                    X["spatiotemporal_cluster_id"] == b_id,
-                    "spatiotemporal_cluster_id"
-                ] = a_id
+                ids[members[b_id]] = a_id
+                members[a_id] = rows
+                del members[b_id]
+                del summaries[b_id]
 
                 merged_this_round.add(a_id)
                 merged_this_round.add(b_id)
+                changed.add(a_id)
                 round_merges += 1
 
             total_merges += round_merges
@@ -1205,62 +1316,97 @@ class MergeExpeditions(BaseEstimator, TransformerMixin):
         if total_merges > 0:
             logger.info("Merge stage complete: %d total merges", total_merges)
 
+        X["spatiotemporal_cluster_id"] = ids
         return X
+
+    def _validate_merge_rows(self, day_values: np.ndarray, candidate: _MergeCandidate) -> bool:
+        """
+        _validate_merge on the two clusters' dates (datetime64 array, any order):
+        the merged expedition must not have an internal gap above the threshold.
+        """
+        d = np.sort(day_values[~np.isnat(day_values)])
+        if len(d) < MIN_DATES_FOR_GAP:
+            return True
+        has_vessel = candidate.exp_a.vessel is not None or candidate.exp_b.vessel is not None
+        gap_threshold = self.max_gap_days * 2 if has_vessel else self.max_gap_days
+        gaps = np.diff(d.astype("datetime64[D]").astype(float))
+        max_internal_gap = gaps.max() if len(gaps) > 0 else 0
+        return max_internal_gap <= gap_threshold
 
     def _find_candidates(
         self,
         summaries: dict[int, _ExpeditionSummary],
         collector_coherence: float,
     ) -> list[_MergeCandidate]:
-        """Find and score all valid merge candidate pairs."""
-        candidates = []
+        """
+        Find and score all valid merge candidate pairs.
 
-        # Group by year for efficiency
+        Inputs:  summaries in ascending id order; collector_coherence.
+        Output:  candidates scoring >= merge_threshold, in the order of the
+                 pairwise loop: years in order of first appearance, then the
+                 earlier expedition (by start date, stable), then the later.
+        Pairs are the same expedition year and date precision, with
+        gap = max(0, start_b - end_a) <= max_merge_gap_days (b starts no
+        earlier than a, so the gap only grows along the sorted list: the
+        window ends at a binary search), and centroids within
+        max_merge_distance_km. A vectorised distance with a 1e-9 relative
+        margin discards far pairs; every kept pair is decided by haversine_km
+        and _compute_merge_score exactly as before.
+        """
+        candidates = []
         by_year: dict[int, list[_ExpeditionSummary]] = {}
         for s in summaries.values():
             by_year.setdefault(s.year, []).append(s)
+        day_ns = np.int64(86_400_000_000_000)
+        margin = self.max_merge_distance_km * (1 + 1e-9) + 1e-9
 
         for year_exps in by_year.values():
-            # Sort by start_date for efficient gap checking
+            if any(pd.isna(s.start_date) or pd.isna(s.end_date) for s in year_exps):
+                raise ValueError("merge stage: an expedition without a start or end date")
+            # Sort by start_date for efficient gap checking (stable, as list.sort)
             year_exps.sort(key=lambda s: s.start_date)
-
-            for i, exp_a in enumerate(year_exps):
-                for j in range(i + 1, len(year_exps)):
-                    exp_b = year_exps[j]
-
-                    # Never merge across date precisions (bug #427): a
-                    # year-only expedition's padded 1 January is not a day.
-                    if exp_a.date_precision != exp_b.date_precision:
-                        continue
-
-                    # Temporal gap check (hard constraint)
+            n = len(year_exps)
+            start = np.array([s.start_date.value for s in year_exps], dtype=np.int64)
+            end = np.array([s.end_date.value for s in year_exps], dtype=np.int64)
+            prec = np.array([s.date_precision for s in year_exps])
+            lat = np.radians(np.array([s.centroid_lat for s in year_exps], dtype=float))
+            lon = np.radians(np.array([s.centroid_lon for s in year_exps], dtype=float))
+            # first j whose floor-day gap after a's end exceeds the maximum
+            hi = np.searchsorted(start, end + (self.max_merge_gap_days + 1) * day_ns, side="left")
+            hi = np.maximum(hi, np.arange(n) + 1)
+            counts = hi - np.arange(n) - 1
+            for lo_i in range(0, n, 20000):
+                ii_idx = np.arange(lo_i, min(n, lo_i + 20000))
+                c = counts[ii_idx]
+                if c.sum() == 0:
+                    continue
+                ii = np.repeat(ii_idx, c)
+                jj = ii + 1 + (np.arange(len(ii)) - np.repeat(np.cumsum(c) - c, c))
+                same = prec[ii] == prec[jj]
+                ii, jj = ii[same], jj[same]
+                dlat = lat[jj] - lat[ii]
+                dlon = lon[jj] - lon[ii]
+                h = np.sin(dlat / 2) ** 2 + np.cos(lat[ii]) * np.cos(lat[jj]) * np.sin(dlon / 2) ** 2
+                near = 6371.0 * 2 * np.arcsin(np.sqrt(np.clip(h, 0, 1))) <= margin
+                for i, j in zip(ii[near].tolist(), jj[near].tolist(), strict=True):
+                    exp_a, exp_b = year_exps[i], year_exps[j]
                     if exp_a.end_date <= exp_b.start_date:
                         gap = (exp_b.start_date - exp_a.end_date).days
                     else:
                         gap = (exp_a.start_date - exp_b.end_date).days
                     gap = max(0, gap)
-
-                    if gap > self.max_merge_gap_days:
-                        # Since sorted by start_date, if gap is too large
-                        # all subsequent will also be too large
-                        break
-
-                    # Spatial distance check (hard constraint)
                     dist = haversine_km(
                         exp_a.centroid_lat, exp_a.centroid_lon,
                         exp_b.centroid_lat, exp_b.centroid_lon,
                     )
                     if dist > self.max_merge_distance_km:
                         continue
-
-                    # Score
                     score = _compute_merge_score(
                         exp_a, exp_b,
                         self.max_merge_gap_days,
                         self.max_merge_distance_km,
                         collector_coherence,
                     )
-
                     if score >= self.merge_threshold:
                         candidates.append(_MergeCandidate(
                             exp_a=exp_a,
@@ -1349,6 +1495,7 @@ def create_pipeline(
     merge_distance_km: float = 30.0,
     merge_threshold: float = 0.6,
     enable_merge: bool = True,
+    n_jobs: int = 1,
 ):
     """
     Create the expedition clustering pipeline.
@@ -1373,6 +1520,9 @@ def create_pipeline(
         Minimum merge score (0-1) required to execute a merge.
     enable_merge : bool
         If True, run the merge stage after initial clustering.
+    n_jobs : int
+        Worker processes for the per-group spatial DBSCAN calls (1 = serial).
+        The result does not depend on it.
 
     Returns
     -------
@@ -1387,9 +1537,9 @@ def create_pipeline(
             include_year=include_year_in_partition,
             alias_file=collector_alias_file
         )),
-        ("spatial_dbscan", SpatialDBSCAN(e_dist=e_dist)),
-        ("iterative_spatiotemporal", IterativeSpatiotemporalClustering(e_dist=e_dist, e_days=e_days)),
-        ("validate_connectivity", ValidateSpatiotemporalConnectivity(e_dist=e_dist, e_days=e_days)),
+        ("spatial_dbscan", SpatialDBSCAN(e_dist=e_dist, n_jobs=n_jobs)),
+        ("iterative_spatiotemporal", IterativeSpatiotemporalClustering(e_dist=e_dist, e_days=e_days, n_jobs=n_jobs)),
+        ("validate_connectivity", ValidateSpatiotemporalConnectivity(e_dist=e_dist, e_days=e_days, n_jobs=n_jobs)),
     ]
 
     if enable_merge:
