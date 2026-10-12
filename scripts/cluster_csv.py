@@ -408,6 +408,14 @@ def main():
     collector_str = ", collector-aware" if collector_aware else ""
     merge_str = ", merge disabled" if not enable_merge else ""
     alias_str = ", using alias file" if args.collector_alias_file else ""
+    if args.collector_alias_file:
+        # How many of this collection's collector names the CAS Lens spelling
+        # map reaches (#378); a file that cannot be read stops the run here.
+        coverage = _pipeline_module.alias_coverage(
+            df_valid["collectors"] if "collectors" in df_valid.columns else pd.Series(dtype=str),
+            _pipeline_module.load_collector_aliases(args.collector_alias_file),
+        )
+        print(f"  {coverage.line()}")
     print(f"Clustering {len(df_valid)} specimens (e_dist={e_dist}km, e_days={e_days} days{collector_str}{merge_str}{alias_str})...")
     pipeline = create_pipeline(
         e_dist=e_dist,

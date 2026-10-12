@@ -390,6 +390,46 @@ def parse_collector_string(collector_str: str) -> list[str]:
     return [re.sub(r"\s+", " ", c).strip() for c in collectors]
 
 
+def _other_order(name: str) -> str | None:
+    """"Thomas, J. H." -> "J. H. Thomas"; None for a name not in "Last, First" form."""
+    name = str(name).strip()
+    if not _looks_like_last_first_format(name):
+        return None
+    last, first = (part.strip() for part in name.split(",", 1))
+    return f"{first} {last}"
+
+
+def alias_id(name: str, aliases: dict[str, str] | None) -> str | None:
+    """
+    The alias table's id for one collector name, or None.
+
+    Both orders of a "Last, First" name are looked up ("Thomas, J. H." finds
+    the alias "J. H. Thomas"), as CAS Lens resolves a name (NAME-ORDER-1):
+    when the two orders give two ids the name names nobody (None), as Lens
+    leaves "Baker, F." unresolved when "F. Baker" is another record.
+    """
+    if not aliases:
+        return None
+    ids: list[str] = []
+    for form in (name, _other_order(name)):
+        if form is None:
+            continue
+        found = aliases.get(normalize_collector_name(form))
+        if found and found not in ids:
+            ids.append(found)
+    return ids[0] if len(ids) == 1 else None
+
+
+def collector_key(name: str, aliases: dict[str, str] | None = None) -> str:
+    """
+    The key of one collector name: its alias table id (alias_id) when the
+    table holds it, else the normalized name ("H. Heath" -> "@h-heath" with a
+    CAS Lens alias table, "h heath" without). The partition and the merge
+    stage use this one rule (CAS Lens #378, EXP-ALIAS-6).
+    """
+    return alias_id(name, aliases) or normalize_collector_name(name)
+
+
 def create_collector_group_key(
     collector_str: str,
     aliases: dict[str, str] | None = None
@@ -420,14 +460,8 @@ def create_collector_group_key(
     if not collectors:
         return "unknown"
 
-    # Normalize each collector
-    normalized = []
-    for coll in collectors:
-        norm = normalize_collector_name(coll)
-        # Try alias lookup
-        if aliases and norm in aliases:
-            norm = aliases[norm]
-        normalized.append(norm)
+    # Normalize each collector (or look it up in the alias table)
+    normalized = [collector_key(coll, aliases) for coll in collectors]
 
     # Sort and join to create canonical key
     normalized.sort()
@@ -471,24 +505,141 @@ def load_collector_aliases(alias_file: Path) -> dict[str, str]:
 
     Raises:
         FileNotFoundError: the file does not exist.
-        ValueError: the file lacks the normalized_name or canonical_id column.
+        ValueError: the file is empty, has no rows, lacks the normalized_name
+            or canonical_id column, has a blank name or id, or maps one
+            normalized name to two ids.
 
     A caller that passes an alias file asked for its spelling map; clustering
     without it would quietly give different expeditions, so neither case is
-    answered with an empty map (bug #430, EXP-ALIAS-1).
+    answered with an empty map (bug #430, EXP-ALIAS-1). A file with a header
+    and no rows is the same case (CAS Lens #378, EXP-ALIAS-4), and a name with
+    two ids would be given to whichever row came last.
 
     """
     if not alias_file.exists():
         msg = f"Collector alias file not found: {alias_file}"
         raise FileNotFoundError(msg)
+    if alias_file.stat().st_size == 0:
+        msg = f"Collector alias file {alias_file} is empty"
+        raise ValueError(msg)
 
-    df = pd.read_csv(alias_file)
+    df = pd.read_csv(alias_file, dtype=str, keep_default_na=False)
     missing = [c for c in ("normalized_name", "canonical_id") if c not in df.columns]
     if missing:
         msg = f"Collector alias file {alias_file} lacks column(s) {', '.join(missing)}; has {list(df.columns)}"
         raise ValueError(msg)
+    if df.empty:
+        msg = f"Collector alias file {alias_file} has no rows: it would map no collector name"
+        raise ValueError(msg)
+    blank = df[(df["normalized_name"].str.strip() == "") | (df["canonical_id"].str.strip() == "")]
+    if not blank.empty:
+        msg = f"Collector alias file {alias_file} has {len(blank)} row(s) with a blank name or id (first: line {blank.index[0] + 2})"
+        raise ValueError(msg)
+    ids = df.drop_duplicates().groupby("normalized_name")["canonical_id"].nunique()
+    shared = sorted(ids[ids > 1].index)
+    if shared:
+        msg = (f"Collector alias file {alias_file} maps {len(shared)} name(s) to two or more ids: "
+               f"{', '.join(shared[:5])}")
+        raise ValueError(msg)
 
-    return dict(zip(df["normalized_name"], df["canonical_id"].astype(str), strict=True))
+    return dict(zip(df["normalized_name"], df["canonical_id"], strict=True))
+
+
+# The prefix of a canonical id made from a CAS Lens person slug, so it can
+# never equal a normalized name of a collector the map does not hold.
+LENS_ID_PREFIX = "@"
+
+
+@dataclass
+class AliasTable:
+    """
+    The alias map made from a CAS Lens spelling map (alias_table_from_spellings).
+
+    aliases      normalized name -> canonical id ("@<slug>"), one id per name
+    shared_keys  normalized names two or more people's spellings give, with
+                 their ids; left out of aliases (giving one of them the key
+                 would put another person's specimens in their expeditions)
+    spellings    spelling rows read
+    skipped      spellings that normalise to nothing ("", "unknown", "...")
+    people       distinct ids in aliases
+    """
+
+    aliases: dict[str, str]
+    shared_keys: dict[str, list[str]]
+    spellings: int
+    skipped: int
+
+    @property
+    def people(self) -> int:
+        return len(set(self.aliases.values()))
+
+
+def alias_table_from_spellings(spellings) -> AliasTable:
+    """
+    Key a CAS Lens spelling map with this repo's normaliser (CAS Lens #378).
+
+    Input:  (alias as written, person slug) pairs: every spelling Lens links
+            to exactly one person.
+    Output: AliasTable. Each alias is keyed by normalize_collector_name, the
+            key create_collector_group_key looks up, so the clustering and
+            Lens agree on which spellings are one person without a second
+            normaliser. A key two slugs give is left out (shared_keys).
+    Raises: ValueError for a spelling with a blank slug.
+    """
+    claims: dict[str, set[str]] = {}
+    count = skipped = 0
+    for alias, slug in spellings:
+        count += 1
+        if not str(slug or "").strip():
+            msg = f"Spelling {alias!r} has a blank slug"
+            raise ValueError(msg)
+        key = normalize_collector_name(alias)
+        if key == "unknown":
+            skipped += 1
+            continue
+        claims.setdefault(key, set()).add(LENS_ID_PREFIX + str(slug).strip())
+    aliases = {k: next(iter(v)) for k, v in claims.items() if len(v) == 1}
+    shared = {k: sorted(v) for k, v in claims.items() if len(v) > 1}
+    return AliasTable(aliases=aliases, shared_keys=shared, spellings=count, skipped=skipped)
+
+
+@dataclass
+class AliasCoverage:
+    """How much of a collection an alias table reaches (alias_coverage)."""
+
+    names_resolved: int
+    names: int
+    rows_resolved: int
+    rows: int
+
+    def line(self) -> str:
+        """The run's log line (CAS Lens #378)."""
+        return (f"collector aliases: {self.names_resolved} of {self.names} collector names resolve "
+                f"to a CAS Lens person ({self.rows_resolved} of {self.rows} rows)")
+
+
+def alias_coverage(collectors: pd.Series, aliases: dict[str, str]) -> AliasCoverage:
+    """
+    Count the distinct collector names (parse_collector_string pieces, by
+    normalized name) the alias table resolves (alias_id: either order), and
+    the rows with a collector of which at least one name it resolves. Rows
+    without a collector are not counted.
+    """
+    names: set[str] = set()
+    resolved: set[str] = set()
+    rows = rows_resolved = 0
+    for raw, n in collectors.dropna().value_counts().items():
+        pieces = {normalize_collector_name(c): c for c in parse_collector_string(raw)}
+        pieces.pop("unknown", None)
+        if not pieces:
+            continue
+        rows += n
+        names |= set(pieces)
+        hit = {k for k, c in pieces.items() if alias_id(c, aliases)}
+        resolved |= hit
+        if hit:
+            rows_resolved += n
+    return AliasCoverage(len(resolved), len(names), rows_resolved, rows)
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -523,6 +674,7 @@ def measure_collector_coherence(
     df: pd.DataFrame,
     cluster_col: str = "spatiotemporal_cluster_id",
     collector_col: str = "collectors",
+    aliases: dict[str, str] | None = None,
 ) -> float:
     """
     Measure what fraction of expeditions have a single primary collector.
@@ -550,7 +702,7 @@ def measure_collector_coherence(
         names = names_of.get(value)
         if names is None:
             names = names_of[value] = tuple(
-                {normalize_collector_name(c) for c in parse_collector_string(value)} - {"unknown"})
+                {collector_key(c, aliases) for c in parse_collector_string(value)} - {"unknown"})
         for name in names:
             pair_ids.append(cid)
             pair_names.append(name)
@@ -594,6 +746,7 @@ def _build_expedition_summary(
     expedition_id: int,
     group: pd.DataFrame,
     collector_col: str = "collectors",
+    aliases: dict[str, str] | None = None,
 ) -> _ExpeditionSummary:
     """Build summary statistics for a single expedition."""
     dates = pd.to_datetime(group["startdate"]).dropna()
@@ -610,7 +763,7 @@ def _build_expedition_summary(
             raw = str(raw_value)
             parsed = parse_collector_string(raw)
             for c in parsed:
-                norm = normalize_collector_name(c)
+                norm = collector_key(c, aliases)
                 if norm != "unknown":
                     collectors.add(norm)
             if vessel is None:
@@ -1176,14 +1329,22 @@ class MergeExpeditions(BaseEstimator, TransformerMixin):
         merge_threshold=0.6,
         max_gap_days=3,
         max_iterations=10,
+        alias_file: Path | None = None,
     ):
         self.max_merge_gap_days = max_merge_gap_days
         self.max_merge_distance_km = max_merge_distance_km
         self.merge_threshold = merge_threshold
         self.max_gap_days = max_gap_days
         self.max_iterations = max_iterations
+        # The collector alias file (CAS Lens #378): two spellings of one
+        # person count as one collector in the overlap score, as they are one
+        # partition in CollectorPartitioning.
+        self.alias_file = alias_file
+        self._aliases: dict[str, str] = {}
 
     def fit(self, X, y=None):
+        if self.alias_file:
+            self._aliases = load_collector_aliases(Path(self.alias_file))
         return self
 
     def transform(self, X):
@@ -1204,7 +1365,7 @@ class MergeExpeditions(BaseEstimator, TransformerMixin):
             return X
 
         # Measure collection-wide collector coherence once
-        collector_coherence = measure_collector_coherence(X)
+        collector_coherence = measure_collector_coherence(X, aliases=self._aliases)
         logger.info("Merge stage: collector_coherence=%.3f", collector_coherence)
 
         ids = X["spatiotemporal_cluster_id"].to_numpy().copy()
@@ -1220,7 +1381,7 @@ class MergeExpeditions(BaseEstimator, TransformerMixin):
             """Raw collector string -> (normalized names, vessel), computed once per string."""
             hit = parsed_cache.get(raw)
             if hit is None:
-                names = tuple(normalize_collector_name(c) for c in parse_collector_string(raw))
+                names = tuple(collector_key(c, self._aliases) for c in parse_collector_string(raw))
                 hit = parsed_cache[raw] = (names, extract_vessel(raw))
             return hit
 
@@ -1548,6 +1709,7 @@ def create_pipeline(
             max_merge_distance_km=merge_distance_km,
             merge_threshold=merge_threshold,
             max_gap_days=int(e_days),
+            alias_file=collector_alias_file,
         )))
 
     return Pipeline(steps)
